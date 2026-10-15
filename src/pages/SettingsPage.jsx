@@ -1,0 +1,197 @@
+import { useEffect, useState } from 'react';
+import { ArrowLeft, Check, Moon, Sun, UserX } from 'lucide-react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { Link } from 'react-router-dom';
+import { AppPageHeader } from '../components/AppPageHeader';
+import { Avatar } from '../components/ui/Avatar';
+import { Button } from '../components/ui/Button';
+import { Card } from '../components/ui/Card';
+import { Input } from '../components/ui/Input';
+import { PhotoCropper } from '../components/PhotoCropper';
+import { uploadAvatar } from '../lib/avatar';
+import { useProfile, useUpdateProfile } from '../hooks/useProfile';
+import { useAuth } from '../providers/AuthProvider';
+import { useToast } from '../providers/ToastProvider';
+import { EmptyState } from '../components/ui/EmptyState';
+import { Skeleton } from '../components/ui/Skeleton';
+import { supabase } from '../lib/supabase';
+import { invalidateFriendshipQueries } from '../hooks/useFriendshipRealtime';
+
+export function SettingsPage({ dark, onToggleTheme, editProfile = false }) {
+  const { user } = useAuth();
+  const profileQuery = useProfile();
+  const updateProfile = useUpdateProfile();
+  const toast = useToast();
+  const queryClient = useQueryClient();
+  const [unblockingId, setUnblockingId] = useState('');
+  const blockedQuery = useQuery({
+    queryKey: ['blocked-users', user?.id],
+    queryFn: async () => {
+      if (!supabase) throw new Error('Supabase is not configured.');
+      const { data, error } = await supabase.rpc('list_blocked_users');
+      if (error) throw error;
+      return data ?? [];
+    },
+    enabled: Boolean(user?.id),
+    retry: 1,
+  });
+  const [profile, setProfile] = useState(null);
+  const [photo, setPhoto] = useState(null);
+  const [photoChanged, setPhotoChanged] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    if (profileQuery.isError) toast(profileQuery.error.message || 'Your profile could not be loaded.');
+  }, [profileQuery.isError, profileQuery.error, toast]);
+  useEffect(() => {
+    if (blockedQuery.isError) toast(blockedQuery.error.message || 'Blocked users could not be loaded.');
+  }, [blockedQuery.isError, blockedQuery.error, toast]);
+
+  async function unblock(blockedUser) {
+    if (unblockingId) return;
+    setUnblockingId(blockedUser.id);
+    try {
+      const { error: unblockError } = await supabase.rpc('unblock_user', { target: blockedUser.id });
+      if (unblockError) throw unblockError;
+      toast(`${blockedUser.name} has been unblocked.`, 'success');
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['blocked-users', user.id] }),
+        invalidateFriendshipQueries(queryClient, user.id),
+      ]);
+    } catch (unblockError) {
+      toast(unblockError.message || 'This user could not be unblocked.');
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['blocked-users', user.id] }),
+        invalidateFriendshipQueries(queryClient, user.id),
+      ]);
+    } finally {
+      setUnblockingId('');
+    }
+  }
+
+  useEffect(() => {
+    if (!profileQuery.data) return;
+    setProfile((current) => current ?? {
+      ...profileQuery.data,
+      bio: profileQuery.data.bio ?? '',
+      location: profileQuery.data.location ?? '',
+    });
+  }, [profileQuery.data]);
+
+  async function saveProfile(event) {
+    event.preventDefault();
+    if (saving) return;
+    if (!profile.name.trim()) {
+      const message = 'Your name can’t be empty.';
+      setError(message);
+      toast(message);
+      return;
+    }
+    setSaving(true);
+    setError('');
+    try {
+      let photoUrl;
+      if (photoChanged) photoUrl = photo ? await uploadAvatar(user.id, photo) : null;
+      const updatedProfile = await updateProfile.mutateAsync({
+        name: profile.name.trim(),
+        bio: profile.bio.trim() || null,
+        location: profile.location.trim() || null,
+        ...(photoChanged && { photo_url: photoUrl }),
+      });
+      setProfile({
+        ...updatedProfile,
+        bio: updatedProfile.bio ?? '',
+        location: updatedProfile.location ?? '',
+      });
+      setPhotoChanged(false);
+      setPhoto(null);
+      toast('Your profile has been saved.', 'success');
+    } catch (saveError) {
+      const message = saveError.message || 'Your changes could not be saved.';
+      setError(message);
+      toast(message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="app-page-content">
+      <AppPageHeader
+        eyebrow={editProfile ? 'YOUR PROFILE' : 'MAKE IT YOURS'}
+        title={editProfile ? 'Edit profile' : 'Settings'}
+        description={editProfile ? 'Update your photo and the details people see.' : 'A few preferences for your Gather space.'}
+      />
+      <div className="settings-grid">
+        <Card className="settings-card">
+          <h2>Your profile</h2>
+          <p className="settings-card-intro">The basics people see when they find you.</p>
+          {profileQuery.isLoading && !profile && <div className="list-skeleton"><span className="ui-skeleton people-skeleton" /><span className="ui-skeleton people-skeleton" /></div>}
+          {profileQuery.isError && <div className="inline-alert" role="alert">{profileQuery.error.message || 'Your profile could not be loaded.'}</div>}
+          {profile && (
+              <form className="settings-form" onSubmit={saveProfile}>
+                <div className="settings-avatar-row">
+                  <Avatar src={profile.photo_url} name={profile.name} size="lg" />
+                  <div className="settings-avatar-copy">
+                    <strong>Profile photo</strong>
+                    <small>A friendly face goes a long way.</small>
+                  </div>
+                </div>
+                <PhotoCropper
+                  key={profile.photo_url ?? 'no-photo'}
+                  initialUrl={profile.photo_url}
+                  onCropped={(blob, touched) => {
+                    setPhoto(blob);
+                    if (touched) setPhotoChanged(true);
+                  }}
+                  onToast={toast}
+                />
+                <Input label="Name" id="settings-name" autoComplete="name" maxLength={80} value={profile.name} onChange={(event) => setProfile({ ...profile, name: event.target.value })} error={profile.name.trim() ? '' : 'Your name can’t be empty.'} />
+                <div className="settings-readonly"><span className="ui-input-label">Username</span><strong>@{profile.username}</strong><small>Usernames can’t be changed here.</small></div>
+                <div className="ui-input-field">
+                  <label className="ui-input-label" htmlFor="settings-bio">About you</label>
+                  <textarea className="ui-input settings-textarea" id="settings-bio" maxLength={160} rows={3} value={profile.bio} onChange={(event) => setProfile({ ...profile, bio: event.target.value })} />
+                  <span className="ui-input-message">{profile.bio.length}/160</span>
+                </div>
+                <Input label="Location" id="settings-location" autoComplete="address-level2" maxLength={100} value={profile.location} onChange={(event) => setProfile({ ...profile, location: event.target.value })} />
+                {error && <div className="inline-alert" role="alert">{error}</div>}
+                <Button type="submit" loading={saving}><Check size={16} /> Save profile</Button>
+              </form>
+          )}
+        </Card>
+        <div className="settings-side">
+          <Card className="settings-card">
+            <h2>Appearance</h2>
+            <p className="settings-card-intro">Make yourself comfortable.</p>
+            <button className="appearance-toggle" type="button" onClick={onToggleTheme}>
+              <span className="appearance-icon">{dark ? <Moon size={18} /> : <Sun size={18} />}</span>
+              <span><strong>{dark ? 'Dark mode' : 'Light mode'}</strong><small>Your choice is saved on this device.</small></span>
+              <span className={`theme-switch${dark ? ' theme-switch-on' : ''}`} />
+            </button>
+          </Card>
+          <Card className="settings-card settings-account-card">
+            <h2>Your account</h2>
+            <p className="settings-card-intro">Signed in with</p>
+            <p className="settings-email">{user.email}</p>
+            <Link className="settings-back-link" to="/"><ArrowLeft size={14} /> Back to your space</Link>
+          </Card>
+          <Card className="settings-card blocked-users-card">
+            <h2>Blocked users</h2>
+            <p className="settings-card-intro">People you’ve blocked can’t find or interact with you.</p>
+            {blockedQuery.isLoading && <div className="list-skeleton"><Skeleton className="people-skeleton" /></div>}
+            {blockedQuery.isError && <div className="inline-alert" role="alert">{blockedQuery.error.message || 'Blocked users could not be loaded.'}</div>}
+            {blockedQuery.isSuccess && blockedQuery.data.length === 0 && <EmptyState icon={UserX} title="No blocked users" description="People you block will appear here." />}
+            {blockedQuery.data?.map((blockedUser) => (
+              <div className="blocked-user-row" key={blockedUser.id}>
+                <Avatar src={blockedUser.photo_url} name={blockedUser.name} size="sm" />
+                <span><strong>{blockedUser.name}</strong><small>@{blockedUser.username}</small></span>
+                <Button size="sm" variant="secondary" onClick={() => unblock(blockedUser)} loading={unblockingId === blockedUser.id}>Unblock</Button>
+              </div>
+            ))}
+          </Card>
+        </div>
+      </div>
+    </div>
+  );
+}
