@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { MessageCircle, Plus, UsersRound } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { Link, Outlet, useParams } from 'react-router-dom';
 import { AppPageHeader } from '../components/AppPageHeader';
 import { Avatar } from '../components/ui/Avatar';
 import { Card } from '../components/ui/Card';
@@ -81,12 +81,28 @@ function conversationName(conversation) {
   return conversation.otherProfiles.map((person) => person.name).join(', ') || 'Direct conversation';
 }
 
+function conversationTime(value) {
+  if (!value) return '';
+  const date = new Date(value);
+  const today = new Date();
+  if (date.toDateString() === today.toDateString()) {
+    return date.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  }
+  const yesterday = new Date(today);
+  yesterday.setDate(today.getDate() - 1);
+  if (date.toDateString() === yesterday.toDateString()) return 'Yesterday';
+  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
 export function MessagesPage() {
   const { user } = useAuth();
   const toast = useToast();
   const queryClient = useQueryClient();
+  const { conversationId: selectedConversationId } = useParams();
   const [search, setSearch] = useState('');
   const [newGroupOpen, setNewGroupOpen] = useState(false);
+  const [typingConversations, setTypingConversations] = useState({});
+  const typingTimers = useRef(new Map());
   useFriendshipRealtime();
   const query = useQuery({
     queryKey: ['conversations', user?.id],
@@ -112,43 +128,114 @@ export function MessagesPage() {
     return () => { supabase.removeChannel(channel); };
   }, [user?.id, queryClient, toast]);
 
+  const directConversationIds = useMemo(
+    () => (query.data ?? [])
+      .filter((conversation) => conversation.type === 'direct' && conversation.id !== selectedConversationId)
+      .map((conversation) => conversation.id)
+      .sort(),
+    [query.data, selectedConversationId],
+  );
+  useEffect(() => {
+    if (!user?.id || !supabase || directConversationIds.length === 0) {
+      setTypingConversations((current) => {
+        const next = Object.fromEntries(Object.entries(current).filter(([id]) => directConversationIds.includes(id)));
+        return next;
+      });
+      return undefined;
+    }
+    const channels = directConversationIds.map((conversationId) => supabase
+      .channel(`conversation-${conversationId}`)
+      .on('broadcast', { event: 'typing' }, ({ payload }) => {
+        if (payload?.userId === user.id) return;
+        window.clearTimeout(typingTimers.current.get(conversationId));
+        if (payload?.typing) {
+          typingTimers.current.set(conversationId, window.setTimeout(() => {
+            setTypingConversations((current) => ({ ...current, [conversationId]: false }));
+            typingTimers.current.delete(conversationId);
+          }, 3500));
+        } else {
+          typingTimers.current.delete(conversationId);
+        }
+        setTypingConversations((current) => ({ ...current, [conversationId]: Boolean(payload?.typing) }));
+      })
+      .subscribe((status) => {
+        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          toast('Typing previews are temporarily unavailable.');
+        }
+      }));
+    return () => {
+      channels.forEach((channel) => supabase.removeChannel(channel));
+      directConversationIds.forEach((conversationId) => {
+        window.clearTimeout(typingTimers.current.get(conversationId));
+        typingTimers.current.delete(conversationId);
+      });
+    };
+  }, [user?.id, directConversationIds, toast]);
+
   const visibleConversations = (query.data ?? []).filter((conversation) => {
     const name = conversationName(conversation);
     return `${name} ${conversation.otherProfiles.map((person) => person.username).join(' ')}`.toLowerCase().includes(search.trim().toLowerCase());
   });
+  const activeFriends = (query.data ?? [])
+    .filter((conversation) => conversation.type === 'direct')
+    .flatMap((conversation) => conversation.otherProfiles
+      .filter((person) => Date.now() - new Date(person.last_seen ?? 0).getTime() < 5 * 60_000)
+      .map((person) => ({ ...person, conversationId: conversation.id })))
+    .filter((person, index, people) => people.findIndex((candidate) => candidate.id === person.id) === index);
 
   return (
-    <div className="app-page-content">
-      <AppPageHeader eyebrow="YOUR CONVERSATIONS" title="Messages" description="Conversations with people you care about." action={<Button onClick={() => setNewGroupOpen(true)}><Plus size={15} /> New group</Button>} />
-      <label className="app-search-wrap messages-search"><MessageCircle size={16} /><input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search conversations" aria-label="Search conversations" /></label>
-      <Card className="people-card">
-        {query.isLoading && <div className="list-skeleton">{[1, 2, 3].map((item) => <Skeleton className="people-skeleton" key={item} />)}</div>}
-        {query.isError && <EmptyState icon={MessageCircle} title="Messages didn’t load" description={query.error.message || 'Check your connection and try again.'} />}
-        {query.isSuccess && query.data.length === 0 && (
-          <EmptyState icon={MessageCircle} title="Your conversations start here" description="Once you’re connected with a friend, your chats will be ready here." />
+    <div className={`app-page-content messages-workspace${selectedConversationId ? ' messages-workspace-selected' : ''}`}>
+      <section className="messages-sidebar">
+        <AppPageHeader eyebrow="YOUR CONVERSATIONS" title="Messages" action={<Button aria-label="Create group chat" onClick={() => setNewGroupOpen(true)}><Plus size={18} /><span>New group</span></Button>} />
+        <label className="app-search-wrap messages-search"><MessageCircle size={18} /><input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search conversations" aria-label="Search conversations" /></label>
+        {activeFriends.length > 0 && (
+          <section className="active-friends-strip" aria-label="Friends active now">
+            <div className="active-friends-heading"><span className="active-now-dot" /><strong>Active now</strong></div>
+            <div className="active-friends-list">
+              {activeFriends.map((person) => (
+                <Link className="active-friend" to={`/messages/${person.conversationId}`} key={person.id} title={`Message ${person.name}`}>
+                  <Avatar src={person.photo_url} name={person.name} size="md" online ring />
+                  <span>{person.name}</span>
+                </Link>
+              ))}
+            </div>
+          </section>
         )}
-        {query.isSuccess && query.data.length > 0 && visibleConversations.length === 0 && <EmptyState icon={MessageCircle} title="No conversations found" description="Try another name or username." />}
-        {visibleConversations.map((conversation) => {
-          const latest = conversation.latestMessage;
-          const leadProfile = conversation.otherProfiles[0];
-          const online = leadProfile?.last_seen && Date.now() - new Date(leadProfile.last_seen).getTime() < 5 * 60_000;
-          return (
-            <Link className="people-row message-row" to={`/messages/${conversation.id}`} key={conversation.id}>
-              {conversation.type === 'group'
-                ? <Avatar src={conversation.photo_url} name={conversation.name} size="md" />
-                : <Avatar src={leadProfile?.photo_url} name={leadProfile?.name || 'Member'} size="md" online={Boolean(online)} />}
-              <span className="people-row-copy">
-                <strong>{conversationName(conversation)}</strong>
-                <small>{latest?.body || (latest?.image_url ? 'Photo' : 'No messages yet')}</small>
-              </span>
-              <span className="message-row-meta">
-                <small>{latest && new Date(latest.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</small>
-                {conversation.unreadCount > 0 && <span className="conversation-unread-count">{conversation.unreadCount > 99 ? '99+' : conversation.unreadCount}</span>}
-              </span>
-            </Link>
-          );
-        })}
-      </Card>
+        <Card className="people-card messages-list-card">
+          {query.isLoading && <div className="list-skeleton">{[1, 2, 3].map((item) => <Skeleton className="people-skeleton" key={item} />)}</div>}
+          {query.isError && <EmptyState icon={MessageCircle} title="Messages didn’t load" description={query.error.message || 'Check your connection and try again.'} action={<Button size="sm" variant="secondary" onClick={() => query.refetch()}>Try again</Button>} />}
+          {query.isSuccess && query.data.length === 0 && (
+            <EmptyState icon={MessageCircle} title="Your conversations start here" description="Once you’re connected with a friend, your chats will be ready here." />
+          )}
+          {query.isSuccess && query.data.length > 0 && visibleConversations.length === 0 && <EmptyState icon={MessageCircle} title="No conversations found" description="Try another name or username." />}
+          {visibleConversations.map((conversation) => {
+            const latest = conversation.latestMessage;
+            const leadProfile = conversation.otherProfiles[0];
+            const online = leadProfile?.last_seen && Date.now() - new Date(leadProfile.last_seen).getTime() < 5 * 60_000;
+            const typingNow = Boolean(typingConversations[conversation.id]);
+            return (
+              <Link className={`people-row message-row${selectedConversationId === conversation.id ? ' message-row-active' : ''}`} to={`/messages/${conversation.id}`} key={conversation.id}>
+                {conversation.type === 'group'
+                  ? <Avatar src={conversation.photo_url} name={conversation.name} size="md" />
+                  : <Avatar src={leadProfile?.photo_url} name={leadProfile?.name || 'Member'} size="md" online={Boolean(online)} ring={Boolean(online)} />}
+                <span className="people-row-copy">
+                  <strong>{conversationName(conversation)}</strong>
+                  <small className={typingNow ? 'message-row-typing' : ''}>{typingNow ? 'typing…' : latest?.body || (latest?.image_url ? 'Photo' : 'No messages yet')}</small>
+                </span>
+                <span className="message-row-meta">
+                  <small>{latest && conversationTime(latest.created_at)}</small>
+                  {conversation.unreadCount > 0 && <span className="conversation-unread-count">{conversation.unreadCount > 99 ? '99+' : conversation.unreadCount}</span>}
+                </span>
+              </Link>
+            );
+          })}
+        </Card>
+      </section>
+      <section className="messages-chat-pane" aria-label="Selected conversation">
+        {selectedConversationId
+          ? <Outlet />
+          : <EmptyState icon={MessageCircle} title="Your space to talk" description="Choose a conversation to pick up where you left off, or start a new group." />}
+      </section>
       <NewGroupModal open={newGroupOpen} onClose={() => setNewGroupOpen(false)} />
     </div>
   );

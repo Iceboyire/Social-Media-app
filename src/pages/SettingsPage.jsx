@@ -128,7 +128,8 @@ export function SettingsPage({ dark, onToggleTheme, editProfile = false }) {
           <h2>Your profile</h2>
           <p className="settings-card-intro">The basics people see when they find you.</p>
           {profileQuery.isLoading && !profile && <div className="list-skeleton"><span className="ui-skeleton people-skeleton" /><span className="ui-skeleton people-skeleton" /></div>}
-          {profileQuery.isError && <div className="inline-alert" role="alert">{profileQuery.error.message || 'Your profile could not be loaded.'}</div>}
+          {profileQuery.isError && !profile && <div className="inline-alert settings-error" role="alert"><span>{profileQuery.error.message || 'Your profile could not be loaded.'}</span><Button size="sm" variant="secondary" onClick={() => profileQuery.refetch()}>Try again</Button></div>}
+          {profileQuery.isSuccess && !profile && <EmptyState icon={UserX} title="Profile unavailable" description="Your profile is not available right now." action={<Button size="sm" variant="secondary" onClick={() => profileQuery.refetch()}>Try again</Button>} />}
           {profile && (
               <form className="settings-form" onSubmit={saveProfile}>
                 <div className="settings-avatar-row">
@@ -174,13 +175,14 @@ export function SettingsPage({ dark, onToggleTheme, editProfile = false }) {
             <h2>Your account</h2>
             <p className="settings-card-intro">Signed in with</p>
             <p className="settings-email">{user.email}</p>
-            <Link className="settings-back-link" to="/"><ArrowLeft size={14} /> Back to your space</Link>
+            <Link className="settings-back-link" to="/home"><ArrowLeft size={14} /> Back to your space</Link>
+            <Link className="settings-privacy-link" to="/privacy">Privacy Policy</Link>
           </Card>
           <Card className="settings-card blocked-users-card">
             <h2>Blocked users</h2>
             <p className="settings-card-intro">People you’ve blocked can’t find or interact with you.</p>
             {blockedQuery.isLoading && <div className="list-skeleton"><Skeleton className="people-skeleton" /></div>}
-            {blockedQuery.isError && <div className="inline-alert" role="alert">{blockedQuery.error.message || 'Blocked users could not be loaded.'}</div>}
+            {blockedQuery.isError && <div className="inline-alert settings-error" role="alert"><span>{blockedQuery.error.message || 'Blocked users could not be loaded.'}</span><Button size="sm" variant="secondary" onClick={() => blockedQuery.refetch()}>Try again</Button></div>}
             {blockedQuery.isSuccess && blockedQuery.data.length === 0 && <EmptyState icon={UserX} title="No blocked users" description="People you block will appear here." />}
             {blockedQuery.data?.map((blockedUser) => (
               <div className="blocked-user-row" key={blockedUser.id}>

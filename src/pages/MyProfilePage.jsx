@@ -1,16 +1,17 @@
-import { AtSign, MapPin, PencilLine } from 'lucide-react';
+import { AtSign, MapPin, PencilLine, UserRound } from 'lucide-react';
 import { useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { AppPageHeader } from '../components/AppPageHeader';
 import { Avatar } from '../components/ui/Avatar';
 import { Button } from '../components/ui/Button';
 import { Card } from '../components/ui/Card';
+import { EmptyState } from '../components/ui/EmptyState';
 import { Skeleton } from '../components/ui/Skeleton';
 import { useProfile } from '../hooks/useProfile';
 import { useToast } from '../providers/ToastProvider';
 
 export function MyProfilePage() {
-  const { data: profile, isLoading, isError, error } = useProfile();
+  const { data: profile, isLoading, isError, isSuccess, error, refetch } = useProfile();
   const toast = useToast();
   useEffect(() => {
     if (isError) toast(error?.message || 'Your profile could not be loaded.');
@@ -20,7 +21,8 @@ export function MyProfilePage() {
       <AppPageHeader eyebrow="YOUR CORNER" title="My profile" description="A little snapshot of you." action={<Link to="/profile/edit" className="ui-button ui-button-secondary ui-button-sm"><PencilLine size={15} /> Edit profile</Link>} />
       <Card className="my-profile-card">
         {isLoading && <div className="profile-loading"><Skeleton circle className="profile-large-skeleton" /><Skeleton className="profile-line-skeleton" /><Skeleton className="profile-line-skeleton short" /></div>}
-        {isError && <div className="inline-alert" role="alert">{error.message || 'Your profile could not be loaded.'}</div>}
+        {isError && !profile && <EmptyState icon={UserRound} title="Profile didn’t load" description={error?.message || 'Your profile could not be loaded. Check your connection and try again.'} action={<Button size="sm" variant="secondary" onClick={() => refetch()}>Try again</Button>} />}
+        {isSuccess && !profile && <EmptyState icon={UserRound} title="Profile unavailable" description="Your profile is not available right now." action={<Button size="sm" variant="secondary" onClick={() => refetch()}>Try again</Button>} />}
         {profile && (
           <>
             <Avatar src={profile.photo_url} name={profile.name} size="xl" online={Boolean(profile.last_seen && Date.now() - new Date(profile.last_seen).getTime() < 5 * 60_000)} />

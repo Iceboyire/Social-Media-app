@@ -93,7 +93,7 @@ function useAdminDashboard() {
 function OverviewTab() {
   const dashboard = useAdminDashboard();
   if (dashboard.isError) {
-    return <EmptyState icon={ShieldAlert} title="Dashboard data unavailable" description={dashboard.error.message || 'The protected dashboard RPCs could not be loaded.'} />;
+    return <EmptyState icon={ShieldAlert} title="Dashboard data unavailable" description={dashboard.error.message || 'The protected dashboard RPCs could not be loaded.'} action={<Button size="sm" variant="secondary" onClick={() => dashboard.refetch()}>Try again</Button>} />;
   }
   const stats = dashboard.data?.stats;
   return (
@@ -231,7 +231,7 @@ function UsersTab({ currentUserId }) {
             <thead><tr><th>User</th><th>Joined</th><th>Last seen</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody>
               {users.isLoading && [1, 2, 3].map((item) => <tr key={item}><td colSpan="5"><Skeleton className="admin-row-skeleton" /></td></tr>)}
-              {users.isError && <tr><td colSpan="5"><EmptyState icon={Users} title="Users could not be loaded" description={users.error.message} /></td></tr>}
+              {users.isError && <tr><td colSpan="5"><EmptyState icon={Users} title="Users could not be loaded" description={users.error.message} action={<Button size="sm" variant="secondary" onClick={() => users.refetch()}>Try again</Button>} /></td></tr>}
               {!users.isLoading && !users.isError && users.data?.rows.map((profile) => (
                 <tr key={profile.id}>
                   <td><div className="admin-user-cell"><Avatar src={profile.photo_url} name={profile.name} size="sm" /><span><strong>{profile.name}</strong><small>@{profile.username}{profile.role === 'admin' ? ' · Admin' : ''}</small></span></div></td>
@@ -361,7 +361,7 @@ function ReportsTab() {
       <section className="admin-card admin-table-card">
         <div className="admin-report-list">
           {reports.isLoading && [1, 2, 3].map((item) => <Skeleton className="admin-report-skeleton" key={item} />)}
-          {reports.isError && <EmptyState icon={Flag} title="Reports could not be loaded" description={reports.error.message} />}
+          {reports.isError && <EmptyState icon={Flag} title="Reports could not be loaded" description={reports.error.message} action={<Button size="sm" variant="secondary" onClick={() => reports.refetch()}>Try again</Button>} />}
           {!reports.isLoading && !reports.isError && reports.data?.rows.map((report) => (
             <button className="admin-report-row" type="button" key={report.id} onClick={() => setSelected(report)}>
               <span className={`admin-report-icon admin-report-${report.status}`}><Flag size={16} /></span>

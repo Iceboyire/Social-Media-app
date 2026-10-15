@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowDown, ArrowLeft, Check, CheckCheck, ImagePlus, LoaderCircle, Send, Smile, X } from 'lucide-react';
+import { ArrowDown, ArrowLeft, Check, CheckCheck, ImagePlus, LoaderCircle, MoreHorizontal, Send, Smile, X } from 'lucide-react';
 import EmojiPicker from 'emoji-picker-react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { Avatar } from '../components/ui/Avatar';
@@ -11,6 +11,7 @@ import { supabase } from '../lib/supabase';
 import { useAuth } from '../providers/AuthProvider';
 import { useToast } from '../providers/ToastProvider';
 import { GroupInfoPanel } from '../components/GroupChatControls';
+import { Modal } from '../components/ui/Modal';
 
 const PAGE_SIZE = 30;
 const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
@@ -83,7 +84,7 @@ async function fetchMessagePage(conversationId, cursor) {
   };
 }
 
-function ChatImage({ path, alt }) {
+function ChatImage({ path, alt, onImageClick }) {
   const [url, setUrl] = useState('');
   const [error, setError] = useState('');
   useEffect(() => {
@@ -94,11 +95,17 @@ function ChatImage({ path, alt }) {
         if (!active) return;
         if (signedUrlError) setError(signedUrlError.message);
         else setUrl(data.signedUrl);
+      }).catch((signedUrlError) => {
+        if (active) setError(signedUrlError.message || 'Image unavailable');
       });
     return () => { active = false; };
   }, [path]);
   if (error) return <span className="chat-image-error">Image unavailable</span>;
-  return url ? <img className="chat-image" src={url} alt={alt} loading="lazy" /> : <span className="chat-image-loading"><LoaderCircle size={16} /></span>;
+  return url
+    ? <button className="chat-image-open" type="button" onClick={() => onImageClick(url)} aria-label="Open image">
+        <img className="chat-image" src={url} alt={alt} loading="lazy" />
+      </button>
+    : <span className="chat-image-loading"><LoaderCircle size={16} /></span>;
 }
 
 function dayLabel(value) {
@@ -128,6 +135,9 @@ export function ConversationPage() {
   const [readError, setReadError] = useState('');
   const [typingError, setTypingError] = useState('');
   const [groupInfoOpen, setGroupInfoOpen] = useState(false);
+  const [headerMenuOpen, setHeaderMenuOpen] = useState(false);
+  const [lightboxUrl, setLightboxUrl] = useState('');
+  const headerMenuRef = useRef(null);
   const listRef = useRef(null);
   const bottomRef = useRef(null);
   const channelRef = useRef(null);
@@ -182,6 +192,24 @@ export function ConversationPage() {
     if (selectedImageUrlRef.current) URL.revokeObjectURL(selectedImageUrlRef.current);
     window.clearTimeout(typingTimerRef.current);
     window.clearTimeout(incomingTypingTimerRef.current);
+  }, []);
+
+  useEffect(() => {
+    function dismissHeaderMenu(event) {
+      if (!headerMenuRef.current?.contains(event.target)) setHeaderMenuOpen(false);
+    }
+    function closeHeaderMenuOnEscape(event) {
+      if (event.key === 'Escape') {
+        setHeaderMenuOpen(false);
+        setLightboxUrl('');
+      }
+    }
+    document.addEventListener('mousedown', dismissHeaderMenu);
+    document.addEventListener('keydown', closeHeaderMenuOnEscape);
+    return () => {
+      document.removeEventListener('mousedown', dismissHeaderMenu);
+      document.removeEventListener('keydown', closeHeaderMenuOnEscape);
+    };
   }, []);
 
   const markRead = useCallback(async () => {
@@ -436,11 +464,23 @@ export function ConversationPage() {
         {messageState?.conversation.type === 'group'
           ? <Avatar src={messageState.conversation.photo_url} name={displayName} size="sm" />
           : <Avatar src={otherProfile?.photo_url} name={displayName} size="sm" online={otherOnline} />}
-        <span className="chat-header-copy"><strong>{displayName}</strong>{otherProfile && <small>{typing ? 'Typing…' : otherOnline ? 'Online' : `@${otherProfile.username}`}</small>}</span>
-        {messageState?.conversation.type === 'group' && <Button className="chat-group-info-button" variant="secondary" size="sm" aria-label="Group info" onClick={() => setGroupInfoOpen(true)}><UsersRound size={16} /><span>{messageState.members.length}</span></Button>}
+        <span className="chat-header-copy">
+          <strong>{displayName}</strong>
+          {otherProfile && <small className={typing ? 'chat-header-typing' : otherOnline ? 'chat-header-online' : ''}>
+            {typing ? <><span className="chat-status-dot" />Typing…</> : otherOnline ? <><span className="chat-status-dot" />Online</> : `Last seen ${otherProfile.last_seen ? new Date(otherProfile.last_seen).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }) : 'a while ago'}`}
+          </small>}
+          {messageState?.conversation.type === 'group' && <small>{messageState.members.length} members</small>}
+        </span>
+        <div className="chat-header-menu" ref={headerMenuRef}>
+          <Button className="chat-header-more" variant="secondary" size="sm" aria-label="Conversation menu" aria-expanded={headerMenuOpen} onClick={() => setHeaderMenuOpen((open) => !open)}><MoreHorizontal size={19} /></Button>
+          {headerMenuOpen && <div className="chat-header-popover">
+            {otherProfile?.username && <Link to={`/profile/${otherProfile.username}`} onClick={() => setHeaderMenuOpen(false)}>View profile</Link>}
+            {messageState?.conversation.type === 'group' && <button type="button" onClick={() => { setHeaderMenuOpen(false); setGroupInfoOpen(true); }}><UsersRound size={15} /> Group info</button>}
+          </div>}
+        </div>
       </header>
-      {messageQuery.isError && <EmptyState title="Messages unavailable" description={messageQuery.error.message || 'Messages could not be loaded.'} />}
-      {messageState && !messageState.canMessage && <div className="chat-disabled-banner" role="status">{messageState.isBlocked ? 'You can no longer message this person' : 'You can no longer message this person'}</div>}
+      {messageQuery.isError && <EmptyState title="Messages unavailable" description={messageQuery.error.message || 'Messages could not be loaded.'} action={<Button size="sm" variant="secondary" onClick={() => messageQuery.refetch()}>Try again</Button>} />}
+      {messageState && !messageState.canMessage && <div className="chat-disabled-banner" role="status">{messageState.isBlocked ? 'Messaging is unavailable for this conversation.' : 'You can message this person once they accept your friend request.'}</div>}
       {typingError && <p className="chat-live-warning" role="status">{typingError}</p>}
       {readError && <p className="chat-live-warning" role="status">{readError}</p>}
       <Card className="conversation-card">
@@ -459,25 +499,32 @@ export function ConversationPage() {
                 const own = message.sender_id === user.id;
                 const sender = own ? null : messageState.profiles[message.sender_id];
                 const previous = messages[index - 1];
+                const next = messages[index + 1];
                 const newDay = !previous || new Date(previous.created_at).toDateString() !== new Date(message.created_at).toDateString();
+                const groupStart = !previous || previous.is_system || previous.sender_id !== message.sender_id
+                  || new Date(previous.created_at).toDateString() !== new Date(message.created_at).toDateString();
+                const groupEnd = !next || next.is_system || next.sender_id !== message.sender_id
+                  || new Date(next.created_at).toDateString() !== new Date(message.created_at).toDateString();
                 const seen = own && otherMember?.last_read_at && new Date(otherMember.last_read_at) >= new Date(message.created_at);
                 return (
-                  <div key={message.id}>
+                  <div className="chat-message-item" key={message.id}>
                     {newDay && <div className="chat-day-separator"><span>{dayLabel(message.created_at)}</span></div>}
-                    <div className={`chat-message${own ? ' chat-message-own' : ''}`}>
-                      {!own && <Avatar src={sender?.photo_url} name={sender?.name || 'Member'} size="xs" />}
+                    <div className={`chat-message${own ? ' chat-message-own' : ''}${groupStart ? ' chat-message-group-start' : ' chat-message-group-continuation'}${groupEnd ? ' chat-message-group-end' : ''}`}>
+                      {!own && <Avatar src={sender?.photo_url} name={sender?.name || 'Member'} size="xs" className={!groupStart ? 'chat-group-avatar-hidden' : ''} />}
                       <div className={`chat-message-content${message.failed ? ' chat-message-failed' : ''}`}>
-                        {!own && <span className="chat-message-sender">{sender?.name || 'Member'}</span>}
-                        {message.image_url?.startsWith('blob:') ? <img className="chat-image" src={message.image_url} alt="Image to send" /> : message.image_url && <ChatImage path={message.image_url} alt="Shared image" />}
+                        {!own && groupStart && <span className="chat-message-sender">{sender?.name || 'Member'}</span>}
+                        {message.image_url?.startsWith('blob:')
+                          ? <button className="chat-image-open" type="button" onClick={() => setLightboxUrl(message.image_url)} aria-label="Open image"><img className="chat-image" src={message.image_url} alt="Image to send" /></button>
+                          : message.image_url && <ChatImage path={message.image_url} alt="Shared image" onImageClick={setLightboxUrl} />}
                         {message.body && <p>{message.body}</p>}
-                        <time dateTime={message.created_at}>{new Date(message.created_at).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}{own && !message.failed && (seen ? <CheckCheck size={12} aria-label="Seen" /> : <Check size={12} aria-label="Sent" />)}</time>
+                        <time dateTime={message.created_at}>{new Date(message.created_at).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}{own && !message.failed && (seen ? <CheckCheck className="chat-receipt-seen" size={15} aria-label="Seen" /> : <Check className="chat-receipt-sent" size={15} aria-label="Sent" />)}</time>
                         {message.failed && <button type="button" className="chat-retry-button" onClick={() => sendMessage(null, message)}>Failed · Retry</button>}
                       </div>
                     </div>
                   </div>
                 );
               })}
-              {typing && <div className="chat-typing-indicator">{otherProfile?.name || 'Someone'} is typing…</div>}
+              {typing && <div className="chat-typing-indicator"><span>{otherProfile?.name || 'Someone'} is typing</span><i /><i /><i /></div>}
               <span ref={bottomRef} />
             </div>
             {showScrollBottom && <button type="button" className="chat-scroll-bottom" aria-label="Scroll to latest message" onClick={() => bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })}><ArrowDown size={18} /></button>}
@@ -492,7 +539,7 @@ export function ConversationPage() {
                 </div>
               </div>
               <input aria-label="Write a message" placeholder={messageState?.canMessage ? 'Write a message…' : 'Messaging unavailable'} maxLength={5000} value={body} onChange={(event) => changeBody(event.target.value)} disabled={!messageState?.canMessage || sending} />
-              <Button type="submit" loading={sending} disabled={(!body.trim() && !pendingImage) || !messageState?.canMessage} aria-label="Send message"><Send size={17} /></Button>
+              <Button className={`chat-send-button${body.trim() || pendingImage ? ' chat-send-button-visible' : ''}`} type="submit" loading={sending} disabled={(!body.trim() && !pendingImage) || !messageState?.canMessage} aria-label="Send message"><Send size={17} /></Button>
             </form>
           </>
         )}
@@ -508,6 +555,9 @@ export function ConversationPage() {
         profiles={messageState.profiles}
         userId={user.id}
       />}
+      <Modal open={Boolean(lightboxUrl)} onClose={() => setLightboxUrl('')} title="Shared photo" size="lg">
+        {lightboxUrl && <div className="chat-lightbox"><img src={lightboxUrl} alt="Shared in conversation" /></div>}
+      </Modal>
     </div>
   );
 }

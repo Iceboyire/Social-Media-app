@@ -22,6 +22,7 @@ import { LoadingScreen } from './LoadingScreen';
 import { Avatar } from './ui/Avatar';
 import { CountBadge } from './ui/Badge';
 import { SearchResult } from './SearchResult';
+import { Dropdown } from './ui/Dropdown';
 import { useAppCounts } from '../hooks/useAppCounts';
 import { supabase } from '../lib/supabase';
 import { useProfile } from '../hooks/useProfile';
@@ -153,7 +154,7 @@ export function MainLayout({ dark, onToggleTheme }) {
           >
             {mobileMenuOpen ? <X size={20} /> : <Menu size={20} />}
           </button>
-          <Brand to="/" />
+          <Brand to="/home" />
           <div className={`app-search-wrap${searchOpen ? ' search-is-open' : ''}`} ref={searchRef}>
             <Search size={17} aria-hidden="true" />
             <input
@@ -211,8 +212,7 @@ export function MainLayout({ dark, onToggleTheme }) {
               <span className="profile-menu-name">{name}</span>
               <ChevronDown size={15} className={menuOpen ? 'chevron-open' : ''} />
             </button>
-            {menuOpen && (
-              <div className="profile-dropdown">
+            <Dropdown open={menuOpen} className="profile-dropdown">
                 <div className="dropdown-person">
                   {avatar}
                   <span><strong>{name}</strong><small>@{profile?.username}</small></span>
@@ -226,8 +226,7 @@ export function MainLayout({ dark, onToggleTheme }) {
                 <button className="dropdown-logout" type="button" onClick={handleSignOut} disabled={loggingOut}>
                   <LogOut size={16} />{loggingOut ? 'Signing out…' : 'Log out'}
                 </button>
-              </div>
-            )}
+            </Dropdown>
           </div>
         </div>
         {mobileMenuOpen && (

@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
 import Cropper from 'react-easy-crop';
-import { ImagePlus, RotateCcw, X } from 'lucide-react';
+import { Camera, ImagePlus, RotateCcw, X } from 'lucide-react';
 import { ACCEPTED_IMAGE_TYPES, cropImage, validateImage } from '../lib/image';
 
-export function PhotoCropper({ onCropped, onToast, initialUrl }) {
+export function PhotoCropper({ onCropped, onToast, initialUrl, className = '' }) {
   const [source, setSource] = useState('');
   const [preview, setPreview] = useState(initialUrl ?? '');
   const [file, setFile] = useState(null);
@@ -77,18 +77,18 @@ export function PhotoCropper({ onCropped, onToast, initialUrl }) {
   }
 
   return (
-    <div className="photo-field">
+    <div className={`photo-field ${className}`.trim()}>
       <span className="field-label">Profile photo <span className="optional-label">OPTIONAL</span></span>
       <div className="photo-control">
-        <div className={`photo-avatar${preview ? ' photo-avatar-filled' : ''}`}>
+        <label className={`photo-avatar photo-avatar-picker${preview ? ' photo-avatar-filled' : ''}`} htmlFor="profile-photo">
           {preview
             ? <img src={preview} alt="Cropped profile preview" />
-            : <ImagePlus size={22} strokeWidth={1.6} />}
-        </div>
+            : <ImagePlus size={28} strokeWidth={1.6} />}
+          <span className="photo-camera-badge" aria-hidden="true"><Camera size={16} strokeWidth={2} /></span>
+          <span className="sr-only">{preview ? 'Change profile photo' : 'Choose a profile photo'}</span>
+        </label>
         <div className="photo-details">
-          <label className="button button-secondary photo-pick" htmlFor="profile-photo">
-            <ImagePlus size={16} /> {preview ? 'Change photo' : 'Choose a photo'}
-          </label>
+          <label className="button button-secondary photo-pick" htmlFor="profile-photo"><ImagePlus size={16} /> {preview ? 'Change photo' : 'Choose a photo'}</label>
           <input
             className="sr-only"
             id="profile-photo"

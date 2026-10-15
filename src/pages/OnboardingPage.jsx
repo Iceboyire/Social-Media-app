@@ -1,15 +1,13 @@
-import { ArrowRight, MapPin, SkipForward } from 'lucide-react';
+import { ArrowRight, Check, MapPin, SkipForward } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { PhotoCropper } from '../components/PhotoCropper';
-import { ThemeToggle } from '../components/ThemeToggle';
-import { Brand } from '../components/Brand';
 import { uploadAvatar } from '../lib/avatar';
 import { useProfile, useUpdateProfile } from '../hooks/useProfile';
 import { useAuth } from '../providers/AuthProvider';
 import { useToast } from '../providers/ToastProvider';
 
-export function OnboardingPage({ dark, onToggleTheme }) {
+export function OnboardingPage() {
   const { user } = useAuth();
   const { data: profile } = useProfile();
   const updateProfile = useUpdateProfile();
@@ -49,7 +47,7 @@ export function OnboardingPage({ dark, onToggleTheme }) {
       };
       const savedProfile = await updateProfile.mutateAsync(changes);
       toast(`Your space is ready, ${savedProfile.name}.`, 'success');
-      navigate('/', { replace: true });
+      navigate('/home', { replace: true });
     } catch (saveError) {
       const message = saveError.message || 'We could not save your profile. Please try again.';
       setError(message);
@@ -60,23 +58,18 @@ export function OnboardingPage({ dark, onToggleTheme }) {
   }
 
   return (
-    <main className="onboarding-shell">
-      <div className="onboarding-topbar">
-        <Brand />
-        <ThemeToggle dark={dark} onToggle={onToggleTheme} />
+    <div className="auth-form-wrap onboarding-form-wrap">
+      <div className="form-heading onboarding-heading">
+        <span className="form-kicker">ONE LAST STEP</span>
+        <h2>Make yourself <em>at home.</em></h2>
+        <p>Share as much or as little as feels like you. You can always change it later.</p>
+      </div>
+      <div className="signup-stepper" aria-label="Account setup progress">
+        <div className="signup-step signup-step-done"><span className="signup-step-number"><Check size={15} /></span><span>Account</span><span className="signup-step-line signup-step-line-done" /></div>
+        <div className="signup-step signup-step-done"><span className="signup-step-number"><Check size={15} /></span><span>Photo</span><span className="signup-step-line signup-step-line-done" /></div>
+        <div className="signup-step signup-step-current"><span className="signup-step-number">3</span><span>Profile</span></div>
       </div>
       <section className="onboarding-card">
-        <div className="onboarding-progress" aria-label="Profile setup">
-          <span className="progress-step progress-step-done"><i>✓</i> YOUR ACCOUNT</span>
-          <span className="progress-line" />
-          <span className="progress-step progress-step-current"><i>02</i> YOUR CORNER</span>
-        </div>
-        <div className="onboarding-heading">
-          <span className="form-kicker">A COUPLE MORE DETAILS</span>
-          <h1>Make yourself <em>at home.</em></h1>
-          <p>Share as much or as little as feels like you. You can always change it later.</p>
-        </div>
-
         {error && <div className="inline-alert" role="alert">{error}</div>}
         <div className="onboarding-fields">
           <PhotoCropper
@@ -137,7 +130,6 @@ export function OnboardingPage({ dark, onToggleTheme }) {
         </div>
         <p className="onboarding-private"><span /> Your details are yours. Share only what feels right.</p>
       </section>
-      <footer className="onboarding-footer">Take your time. There’s no rush here.</footer>
-    </main>
+    </div>
   );
 }

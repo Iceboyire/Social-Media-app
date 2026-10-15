@@ -86,6 +86,7 @@ export function LoginPage() {
       </form>
       {!configured && <p className="config-notice">Authentication is not connected yet. Add your Supabase URL and anon key to <code>.env.local</code>.</p>}
       <p className="auth-switch">New around here? <Link to="/signup">Create an account <ArrowRight size={14} /></Link></p>
+      <p className="auth-legal-link"><Link to="/privacy">Privacy Policy</Link></p>
       <div className="form-trust"><span /> A quieter space, just for you</div>
     </div>
   );

@@ -570,7 +570,7 @@ begin
     select p.id, p.name, p.username, p.bio, p.location, p.photo_url, p.last_seen
       from public.profiles p
      where p.id <> auth.uid()
-       and p.status <> 'banned'
+        and p.status = 'active'
        and (p.name ilike '%' || btrim(query) || '%'
             or p.username ilike '%' || btrim(query) || '%')
        and not public.is_blocked_between(auth.uid(), p.id)

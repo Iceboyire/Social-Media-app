@@ -41,15 +41,25 @@ export function AuthProvider({ children }) {
     };
   }, [toast]);
 
-  const signUp = useCallback(async ({ name, username, email, password }) => {
+  const signUp = useCallback(async ({ name, username, email, password, privacyPolicyAccepted }) => {
     if (!supabase) throw new Error('Add your Supabase URL and anon key to .env.local to enable authentication.');
+    if (!privacyPolicyAccepted) throw new Error('Accept the Privacy Policy to create an account.');
     return supabase.auth.signUp({
       email,
       password,
       options: {
-        data: { name, username },
+        data: { name, username, privacy_policy_accepted: true },
         emailRedirectTo: `${window.location.origin}/`,
       },
+    });
+  }, []);
+
+  const resendSignUpConfirmation = useCallback(async (email) => {
+    if (!supabase) throw new Error('Add your Supabase URL and anon key to .env.local to enable authentication.');
+    return supabase.auth.resend({
+      type: 'signup',
+      email,
+      options: { emailRedirectTo: `${window.location.origin}/` },
     });
   }, []);
 
@@ -82,11 +92,12 @@ export function AuthProvider({ children }) {
     loading,
     configured: isSupabaseConfigured,
     signUp,
+    resendSignUpConfirmation,
     signIn,
     signOut,
     resetPassword,
     updatePassword,
-  }), [session, loading, signUp, signIn, signOut, resetPassword, updatePassword]);
+  }), [session, loading, signUp, resendSignUpConfirmation, signIn, signOut, resetPassword, updatePassword]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

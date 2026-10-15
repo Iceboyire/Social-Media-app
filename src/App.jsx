@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useState } from 'react';
-import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
+import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AuthLayout } from './components/AuthLayout';
 import { ProfileBoundary } from './components/ProfileBoundary';
@@ -23,6 +23,10 @@ const LoginPage = lazy(() => import('./pages/LoginPage').then((module) => ({ def
 const OnboardingPage = lazy(() => import('./pages/OnboardingPage').then((module) => ({ default: module.OnboardingPage })));
 const ResetPasswordPage = lazy(() => import('./pages/ResetPasswordPage').then((module) => ({ default: module.ResetPasswordPage })));
 const SignupPage = lazy(() => import('./pages/SignupPage').then((module) => ({ default: module.SignupPage })));
+const LandingPage = lazy(() => import('./pages/LandingPage').then((module) => ({ default: module.LandingPage })));
+const PrivacyPolicy = lazy(() => import('./pages/PrivacyPolicy').then((module) => ({ default: module.PrivacyPolicy })));
+const LegalPage = lazy(() => import('./pages/LegalPages').then((module) => ({ default: module.LegalPage })));
+const NotFoundPage = lazy(() => import('./pages/LegalPages').then((module) => ({ default: module.NotFoundPage })));
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -38,9 +42,48 @@ function AuthScreen({ dark, onToggleTheme, children }) {
 }
 
 function AppRoutes({ dark, onToggleTheme }) {
+  const location = useLocation();
+
+  useEffect(() => {
+    const routeMetadata = [
+      { path: '/', title: 'Welcome', description: 'A quieter place to stay close to the people who matter.' },
+      { path: '/home', title: 'Home', description: 'A quieter space for the people who make life feel like life.' },
+      { path: '/login', title: 'Sign in', description: 'Sign in to reconnect with your people on Gather.' },
+      { path: '/signup', title: 'Create an account', description: 'Create your Gather account and make your space yours.' },
+      { path: '/reset-password', title: 'Reset password', description: 'Reset or update your Gather account password.' },
+      { path: '/onboarding', title: 'Finish your profile', description: 'Add the details you want your people to see.' },
+      { path: '/friends', title: 'Friends', description: 'Find and keep up with the people you have connected with.' },
+      { path: '/requests', title: 'Friend requests', description: 'Review invitations to connect on Gather.' },
+      { path: '/messages', title: 'Messages', description: 'Pick up a conversation with your people.' },
+      { path: '/notifications', title: 'Notifications', description: 'See what is happening in your Gather space.' },
+      { path: '/admin', title: 'Admin console', description: 'Manage the Gather community.' },
+      { path: '/profile', title: 'My profile', description: 'View the details you share with your people.' },
+      { path: '/profile/edit', title: 'Edit profile', description: 'Update your Gather photo and profile details.' },
+      { path: '/settings', title: 'Settings', description: 'Manage your profile, appearance, and account settings.' },
+      { path: '/privacy', title: 'Privacy Policy', documentTitle: 'Privacy Policy | Gather', description: 'Read the Gather Privacy Policy to learn how NEMA handles personal information.' },
+      { path: '/terms', title: 'Terms of Service', description: 'Review the terms for using Gather.' },
+    ];
+    const page = routeMetadata.find(({ path }) => path === location.pathname)
+      ?? (location.pathname.startsWith('/profile/') && location.pathname !== '/profile/edit'
+        ? { title: 'Profile', description: 'Get to know someone in your Gather community.' }
+        : location.pathname.startsWith('/messages/')
+          ? { title: 'Conversation', description: 'Continue your conversation on Gather.' }
+          : { title: 'Page not found', description: 'This Gather page could not be found.' });
+    const title = page.documentTitle ?? `${page.title} — Gather`;
+    document.title = title;
+    document.querySelector('meta[name="description"]')?.setAttribute('content', page.description);
+    document.querySelector('meta[property="og:title"]')?.setAttribute('content', title);
+    document.querySelector('meta[property="og:description"]')?.setAttribute('content', page.description);
+    document.querySelector('meta[name="twitter:title"]')?.setAttribute('content', title);
+    document.querySelector('meta[name="twitter:description"]')?.setAttribute('content', page.description);
+  }, [location.pathname]);
+
   return (
     <Suspense fallback={<LoadingScreen />}>
       <Routes>
+        <Route path="/" element={<LandingPage />} />
+        <Route path="/privacy" element={<PrivacyPolicy />} />
+        <Route path="/terms" element={<LegalPage />} />
         <Route element={<ProfileBoundary />}>
           <Route path="/reset-password" element={<AuthScreen dark={dark} onToggleTheme={onToggleTheme}><ResetPasswordPage /></AuthScreen>} />
           <Route element={<PublicOnlyRoute />}>
@@ -48,13 +91,14 @@ function AppRoutes({ dark, onToggleTheme }) {
             <Route path="/signup" element={<AuthScreen dark={dark} onToggleTheme={onToggleTheme}><SignupPage /></AuthScreen>} />
           </Route>
           <Route element={<ProtectedRoute />}>
-            <Route path="/onboarding" element={<OnboardingPage dark={dark} onToggleTheme={onToggleTheme} />} />
+            <Route path="/onboarding" element={<AuthScreen dark={dark} onToggleTheme={onToggleTheme}><OnboardingPage /></AuthScreen>} />
             <Route element={<MainLayout dark={dark} onToggleTheme={onToggleTheme} />}>
-              <Route path="/" element={<HomePage />} />
+              <Route path="/home" element={<HomePage />} />
               <Route path="/friends" element={<FriendsPage />} />
               <Route path="/requests" element={<RequestsPage />} />
-              <Route path="/messages" element={<MessagesPage />} />
-              <Route path="/messages/:conversationId" element={<ConversationPage />} />
+              <Route path="/messages" element={<MessagesPage />}>
+                <Route path=":conversationId" element={<ConversationPage />} />
+              </Route>
               <Route path="/notifications" element={<NotificationsPage />} />
               <Route element={<ProtectedAdminRoute />}>
                 <Route path="/admin" element={<AdminPage />} />
@@ -66,7 +110,7 @@ function AppRoutes({ dark, onToggleTheme }) {
             </Route>
           </Route>
         </Route>
-        <Route path="*" element={<Navigate to="/" replace />} />
+        <Route path="*" element={<NotFoundPage />} />
       </Routes>
     </Suspense>
   );
@@ -75,27 +119,51 @@ function AppRoutes({ dark, onToggleTheme }) {
 export default function App() {
   const [dark, setDark] = useState(() => {
     try {
-      return localStorage.getItem('gather-theme') === 'dark';
+      const savedTheme = localStorage.getItem('gather-theme');
+      if (savedTheme) return savedTheme === 'dark';
     } catch {
-      return false;
+      // Fall back to the system theme when storage is unavailable.
     }
+    return window.matchMedia('(prefers-color-scheme: dark)').matches;
   });
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', dark);
-    try {
-      localStorage.setItem('gather-theme', dark ? 'dark' : 'light');
-    } catch {
-      // Theme still works for this session when storage is unavailable.
-    }
+    document.documentElement.style.colorScheme = dark ? 'dark' : 'light';
   }, [dark]);
+
+  useEffect(() => {
+    const media = window.matchMedia('(prefers-color-scheme: dark)');
+    const syncSystemTheme = (event) => {
+      try {
+        if (localStorage.getItem('gather-theme')) return;
+      } catch {
+        // Keep following the system theme when storage is unavailable.
+      }
+      setDark(event.matches);
+    };
+    media.addEventListener('change', syncSystemTheme);
+    return () => media.removeEventListener('change', syncSystemTheme);
+  }, []);
+
+  function toggleTheme() {
+    setDark((current) => {
+      const next = !current;
+      try {
+        localStorage.setItem('gather-theme', next ? 'dark' : 'light');
+      } catch {
+        // Theme still works for this session when storage is unavailable.
+      }
+      return next;
+    });
+  }
 
   return (
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
         <ToastProvider>
           <AuthProvider>
-            <AppRoutes dark={dark} onToggleTheme={() => setDark((current) => !current)} />
+            <AppRoutes dark={dark} onToggleTheme={toggleTheme} />
           </AuthProvider>
         </ToastProvider>
       </BrowserRouter>

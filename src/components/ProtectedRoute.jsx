@@ -18,7 +18,7 @@ export function ProtectedRoute() {
 export function PublicOnlyRoute() {
   const { user, loading } = useAuth();
   if (loading) return <LoadingScreen message="Restoring your session…" />;
-  if (user) return <Navigate to="/" replace />;
+  if (user) return <Navigate to="/home" replace />;
   return <Outlet />;
 }
 
@@ -51,6 +51,6 @@ export function ProtectedAdminRoute() {
       </div>
     );
   }
-  if (!adminCheck.data) return <Navigate to="/" replace />;
+  if (!adminCheck.data) return <Navigate to="/home" replace />;
   return <Outlet />;
 }

@@ -3,13 +3,27 @@ import { Link } from 'react-router-dom';
 import { AppPageHeader } from '../components/AppPageHeader';
 import { Avatar } from '../components/ui/Avatar';
 import { Card } from '../components/ui/Card';
+import { Button } from '../components/ui/Button';
+import { EmptyState } from '../components/ui/EmptyState';
 import { LoadingScreen } from '../components/LoadingScreen';
 import { useProfile } from '../hooks/useProfile';
 
 export function HomePage() {
-  const { data: profile, isLoading } = useProfile();
+  const { data: profile, isLoading, isError, error, refetch } = useProfile();
 
-  if (isLoading || !profile) return <LoadingScreen message="Getting your space ready…" />;
+  if (isLoading) return <LoadingScreen message="Getting your space ready…" />;
+  if (isError || !profile) {
+    return (
+      <div className="app-page-content app-dashboard">
+        <EmptyState
+          icon={Sprout}
+          title="Your space couldn’t load"
+          description={error?.message || 'Your profile is not available right now. Please try again.'}
+          action={<Button variant="secondary" onClick={() => refetch()}>Try again</Button>}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="app-page-content app-dashboard">

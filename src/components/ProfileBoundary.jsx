@@ -112,7 +112,7 @@ export function ProfileBoundary() {
     return <Navigate to="/onboarding" replace />;
   }
   if (profile.onboarding_completed && location.pathname === '/onboarding') {
-    return <Navigate to="/" replace />;
+    return <Navigate to="/home" replace />;
   }
   return <Outlet />;
 }

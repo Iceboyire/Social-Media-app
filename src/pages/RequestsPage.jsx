@@ -7,6 +7,7 @@ import { Avatar } from '../components/ui/Avatar';
 import { Badge } from '../components/ui/Badge';
 import { Button } from '../components/ui/Button';
 import { Card } from '../components/ui/Card';
+import { Tabs } from '../components/ui/Tabs';
 import { EmptyState } from '../components/ui/EmptyState';
 import { Skeleton } from '../components/ui/Skeleton';
 import { invalidateFriendshipQueries, useFriendshipRealtime } from '../hooks/useFriendshipRealtime';
@@ -81,17 +82,19 @@ export function RequestsPage() {
   return (
     <div className="app-page-content">
       <AppPageHeader eyebrow="YOUR PEOPLE" title="Friend requests" description="Keep up with invitations to connect." />
-      <div className="request-tabs" role="tablist" aria-label="Friend requests">
-        <button type="button" role="tab" aria-selected={tab === 'received'} className={tab === 'received' ? 'request-tab request-tab-active' : 'request-tab'} onClick={() => setTab('received')}>
-          <Inbox size={16} /> Received <Badge variant="blue">{received.length}</Badge>
-        </button>
-        <button type="button" role="tab" aria-selected={tab === 'sent'} className={tab === 'sent' ? 'request-tab request-tab-active' : 'request-tab'} onClick={() => setTab('sent')}>
-          <Send size={16} /> Sent <Badge>{sent.length}</Badge>
-        </button>
-      </div>
-      <Card className="people-card">
+      <Tabs
+        className="request-tabs"
+        label="Friend requests"
+        value={tab}
+        onChange={setTab}
+        items={[
+          { value: 'received', label: 'Received', icon: Inbox, badge: <Badge variant="blue">{received.length}</Badge> },
+          { value: 'sent', label: 'Sent', icon: Send, badge: <Badge>{sent.length}</Badge> },
+        ]}
+      />
+      <Card className="people-card request-list-card">
         {query.isLoading && <div className="list-skeleton">{[1, 2].map((item) => <Skeleton className="people-skeleton" key={item} />)}</div>}
-        {query.isError && <EmptyState icon={UsersRound} title="Requests didn’t load" description={query.error.message || 'Check your connection and try again.'} />}
+        {query.isError && <EmptyState icon={UsersRound} title="Requests didn’t load" description={query.error.message || 'Check your connection and try again.'} action={<Button size="sm" variant="secondary" onClick={() => query.refetch()}>Try again</Button>} />}
         {query.isSuccess && visible.length === 0 && <EmptyState icon={tab === 'received' ? Inbox : Send} title={tab === 'received' ? 'No new requests' : 'No sent requests'} description={tab === 'received' ? 'New friend requests will appear here.' : 'Requests you send will appear here.'} />}
         {visible.map((row) => {
           const online = row.profile.last_seen && Date.now() - new Date(row.profile.last_seen).getTime() < 5 * 60_000;
