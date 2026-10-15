@@ -2,8 +2,8 @@
 
 ## Set up Supabase
 
-1. In the Supabase SQL editor, run the files in `supabase/migrations/` in numerical order, from `01_core_schema.sql` through `10_admin_console.sql`.
-2. Copy `.env.example` to `.env.local` and set `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` from your Supabase project's API settings. Use the public anon/publishable key, never a service-role key.
+1. In the Supabase SQL editor, run each file in `supabase/migrations/` individually and in numerical order, from `01_core_schema.sql` through `10_admin_console.sql`. Wait for each file to finish successfully before running the next.
+2. Create a root `.env.local` or `.env` file with `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` from your Supabase project's API settings. Use the public anon/publishable key, never a service-role key.
 3. In Supabase Authentication, set the site URL to your local app URL and allow the app's `/` and `/reset-password` URLs for email confirmation and password recovery.
 4. Choose whether to require email confirmation in Supabase Authentication. If confirmation is required, new members confirm their address and sign in before continuing profile setup.
 

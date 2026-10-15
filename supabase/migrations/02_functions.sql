@@ -13,6 +13,23 @@ as $$
     );
 $$;
 
+create or replace function public.is_blocked_between(a uuid, b uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+    select a is not null
+       and b is not null
+       and exists (
+           select 1
+           from public.blocks bl
+           where (bl.blocker_id = a and bl.blocked_id = b)
+              or (bl.blocker_id = b and bl.blocked_id = a)
+       );
+$$;
+
 create or replace function public.are_friends(a uuid, b uuid)
 returns boolean
 language sql
@@ -31,23 +48,6 @@ as $$
              and greatest(f.requester_id, f.addressee_id) = greatest(a, b)
        )
        and not public.is_blocked_between(a, b);
-$$;
-
-create or replace function public.is_blocked_between(a uuid, b uuid)
-returns boolean
-language sql
-stable
-security definer
-set search_path = public
-as $$
-    select a is not null
-       and b is not null
-       and exists (
-           select 1
-           from public.blocks bl
-           where (bl.blocker_id = a and bl.blocked_id = b)
-              or (bl.blocker_id = b and bl.blocked_id = a)
-       );
 $$;
 
 create or replace function public.is_conversation_member(p_conversation uuid, p_active_only boolean default false)
