@@ -14,6 +14,7 @@ const FriendsPage = lazy(() => import('./pages/FriendsPage').then((module) => ({
 const RequestsPage = lazy(() => import('./pages/RequestsPage').then((module) => ({ default: module.RequestsPage })));
 const MessagesPage = lazy(() => import('./pages/MessagesPage').then((module) => ({ default: module.MessagesPage })));
 const NotificationsPage = lazy(() => import('./pages/NotificationsPage').then((module) => ({ default: module.NotificationsPage })));
+const CalendarPage = lazy(() => import('./pages/CalendarPage').then((module) => ({ default: module.CalendarPage })));
 const AdminPage = lazy(() => import('./pages/AdminPage').then((module) => ({ default: module.AdminPage })));
 const ConversationPage = lazy(() => import('./pages/ConversationPage').then((module) => ({ default: module.ConversationPage })));
 const SettingsPage = lazy(() => import('./pages/SettingsPage').then((module) => ({ default: module.SettingsPage })));
@@ -56,6 +57,7 @@ function AppRoutes({ dark, onToggleTheme }) {
       { path: '/requests', title: 'Friend requests', description: 'Review invitations to connect on Gather.' },
       { path: '/messages', title: 'Messages', description: 'Pick up a conversation with your people.' },
       { path: '/notifications', title: 'Notifications', description: 'See what is happening in your Gather space.' },
+      { path: '/calendar', title: 'Calendar', description: 'See upcoming plans and find a time to gather with your people.' },
       { path: '/admin', title: 'Admin console', description: 'Manage the Gather community.' },
       { path: '/profile', title: 'My profile', description: 'View the details you share with your people.' },
       { path: '/profile/edit', title: 'Edit profile', description: 'Update your Gather photo and profile details.' },
@@ -100,6 +102,7 @@ function AppRoutes({ dark, onToggleTheme }) {
                 <Route path=":conversationId" element={<ConversationPage />} />
               </Route>
               <Route path="/notifications" element={<NotificationsPage />} />
+              <Route path="/calendar" element={<CalendarPage />} />
               <Route element={<ProtectedAdminRoute />}>
                 <Route path="/admin" element={<AdminPage />} />
               </Route>

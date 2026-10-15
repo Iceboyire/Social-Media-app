@@ -2,7 +2,7 @@
 
 ## Set up Supabase
 
-1. In the Supabase SQL editor, run each file in `supabase/migrations/` individually and in numerical order, from `01_core_schema.sql` through `11_profile_connections.sql`. Wait for each file to finish successfully before running the next.
+1. Enable the `pg_cron` extension in Supabase Database → Extensions. Then run each file in `supabase/migrations/` individually and in numerical order, from `01_core_schema.sql` through `18_calendar.sql`. Wait for each file to finish successfully before running the next.
 2. Create a root `.env.local` or `.env` file with `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` from your Supabase project's API settings. Use the public anon/publishable key, never a service-role key.
 3. In Supabase Authentication, set the site URL to your local app URL and allow the app's `/` and `/reset-password` URLs for email confirmation and password recovery.
 4. Choose whether to require email confirmation in Supabase Authentication. If confirmation is required, new members confirm their address and sign in before continuing profile setup.
@@ -27,3 +27,5 @@ Group chat support includes friend-only creation and membership, admin controls,
 The `/admin` console verifies the active admin role through both the profile row and the server-side `is_admin()` RPC. Admin statistics, moderation actions, report resolution, and message context are protected by database policies and RPC checks. Apply `10_admin_console.sql` to enable its analytics and moderation actions.
 
 The public profile displays friend and mutual-friend details through the authenticated `get_profile_connections(uuid)` RPC. Apply `11_profile_connections.sql` to enable those details.
+
+Gather's planning features use migrations `13_plans.sql` through `18_calendar.sql`: chat plans and responses, expiring hangout status, availability polls, scheduled reminders, private friend circles, and the calendar. Migration `16_plan_reminders.sql` schedules `public.run_gather_planning_automation()` every five minutes with `pg_cron`; verify the `gather-planning-automation` job is present in Supabase after applying it. All writes to these feature tables go through database functions with row-level security enabled.

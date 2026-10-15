@@ -1,5 +1,7 @@
 import { AtSign, ArrowRight, MapPin, MessageCircle, PencilLine, Sprout, UsersRound } from 'lucide-react';
 import { Link } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
+import { useQueryClient } from '@tanstack/react-query';
 import { AppPageHeader } from '../components/AppPageHeader';
 import { Avatar } from '../components/ui/Avatar';
 import { Card } from '../components/ui/Card';
@@ -7,9 +9,30 @@ import { Button } from '../components/ui/Button';
 import { EmptyState } from '../components/ui/EmptyState';
 import { LoadingScreen } from '../components/LoadingScreen';
 import { useProfile } from '../hooks/useProfile';
+import { useAvailability } from '../hooks/useAvailability';
+import { supabase } from '../lib/supabase';
+import { useAuth } from '../providers/AuthProvider';
+import { useToast } from '../providers/ToastProvider';
 
 export function HomePage() {
   const { data: profile, isLoading, isError, error, refetch } = useProfile();
+  const { friends } = useAvailability();
+  const { user } = useAuth();
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const toast = useToast();
+
+  async function openGatherChat(friend) {
+    try {
+      const { data: conversationId, error: conversationError } = await supabase.rpc('get_or_create_direct_conversation', { friend: friend.user_id });
+      if (conversationError) throw conversationError;
+      if (!conversationId) throw new Error('The conversation could not be opened.');
+      await queryClient.invalidateQueries({ queryKey: ['conversations', user.id] });
+      navigate(`/messages/${conversationId}`, { state: { draftMessage: "Hey, I saw you're free. Want to gather?", offerPlan: true } });
+    } catch (actionError) {
+      toast(actionError.message || 'That chat could not be opened.');
+    }
+  }
 
   if (isLoading) return <LoadingScreen message="Getting your space ready…" />;
   if (isError || !profile) {
@@ -51,6 +74,24 @@ export function HomePage() {
           <p className="profile-private"><span /> Your profile belongs to you.</p>
           <Link className="welcome-profile-edit" to="/profile"><PencilLine size={14} /> View my profile</Link>
         </Card>
+      </section>
+      <section className="home-availability" aria-labelledby="home-availability-title">
+        <div className="home-availability-heading">
+          <div><span className="form-kicker">MAKE A PLAN</span><h2 id="home-availability-title">Who’s free?</h2></div>
+          <Link className="welcome-secondary-link" to="/friends">All friends <ArrowRight size={14} /></Link>
+        </div>
+        {friends.isLoading && <div className="availability-friends-loading" aria-label="Loading friend statuses"><span /><span /><span /></div>}
+        {friends.isError && <EmptyState icon={UsersRound} title="Statuses didn’t load" description={friends.error.message || 'Friend availability could not be loaded.'} />}
+        {friends.isSuccess && !friends.data.some((friend) => ['free_now', 'free_tonight'].includes(friend.state)) && (
+          <EmptyState icon={UsersRound} title="No friends are free right now" description="When friends share that they’re free, you’ll see them here." />
+        )}
+        {friends.data?.filter((friend) => ['free_now', 'free_tonight'].includes(friend.state)).map((friend) => (
+          <Card className="home-free-friend" key={friend.user_id}>
+            <Avatar src={friend.photo_url} name={friend.name} size="md" />
+            <div className="home-free-friend-copy"><strong>{friend.name}</strong><span>{friend.state === 'free_now' ? 'Free now' : 'Free tonight'}{friend.note ? ` · ${friend.note}` : ''}</span></div>
+            <Button size="sm" onClick={() => openGatherChat(friend)}><MessageCircle size={14} /> Let’s gather</Button>
+          </Card>
+        ))}
       </section>
       <section className="home-next">
         <div>

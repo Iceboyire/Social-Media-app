@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
   Bell,
+  CalendarDays,
   ChevronDown,
   Compass,
   Home,
@@ -28,13 +29,15 @@ import { supabase } from '../lib/supabase';
 import { useProfile } from '../hooks/useProfile';
 import { useAuth } from '../providers/AuthProvider';
 import { useToast } from '../providers/ToastProvider';
+import { AvailabilityControl } from './AvailabilityControl';
 
 const NotificationBell = lazy(() => import('./NotificationCenter').then((module) => ({ default: module.NotificationBell })));
 
 const mainLinks = [
-  { to: '/', label: 'Home', icon: Home, end: true },
+  { to: '/home', label: 'Home', icon: Home, end: true },
   { to: '/friends', label: 'Friends', icon: UsersRound, badge: 'friends' },
   { to: '/messages', label: 'Messages', icon: Mail, badge: 'messages' },
+  { to: '/calendar', label: 'Calendar', icon: CalendarDays, badge: 'calendar' },
   { to: '/notifications', label: 'Notifications', icon: Bell, badge: 'notifications' },
 ];
 
@@ -42,6 +45,17 @@ export function MainLayout({ dark, onToggleTheme }) {
   const { user, signOut } = useAuth();
   const { data: profile, isLoading: profileLoading } = useProfile();
   const counts = useAppCounts();
+  const calendarCount = useQuery({
+    queryKey: ['calendar-unanswered', user?.id],
+    queryFn: async () => {
+      const { data, error } = await supabase.rpc('get_unanswered_upcoming_plan_count');
+      if (error) throw error;
+      return data ?? 0;
+    },
+    enabled: Boolean(user?.id),
+    staleTime: 30_000,
+    retry: 1,
+  });
   const queryClient = useQueryClient();
   const toast = useToast();
   const navigate = useNavigate();
@@ -60,6 +74,24 @@ export function MainLayout({ dark, onToggleTheme }) {
   useEffect(() => {
     if (counts.isError) toast(counts.error.message || 'Unread counts could not be updated.');
   }, [counts.isError, counts.error, toast]);
+
+  useEffect(() => {
+    if (calendarCount.isError) toast(calendarCount.error.message || 'Your unanswered plan count could not be loaded.');
+  }, [calendarCount.isError, calendarCount.error, toast]);
+
+  useEffect(() => {
+    if (!user?.id || !supabase) return undefined;
+    const channel = supabase.channel(`calendar-badge-${user.id}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'plans' }, () => queryClient.invalidateQueries({ queryKey: ['calendar-unanswered', user.id] }))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'plan_responses' }, () => queryClient.invalidateQueries({ queryKey: ['calendar-unanswered', user.id] }))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'availability' }, () => queryClient.invalidateQueries({ queryKey: ['availability'] }))
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [user?.id, queryClient]);
+
+  function countFor(badge) {
+    return badge === 'calendar' ? calendarCount.data ?? 0 : counts.data?.[badge] ?? 0;
+  }
 
   useEffect(() => {
     if (!user?.id || !supabase) return undefined;
@@ -189,11 +221,12 @@ export function MainLayout({ dark, onToggleTheme }) {
               </div>
             )}
           </div>
+          <AvailabilityControl />
           <nav className="navbar-actions" aria-label="Quick navigation">
             {mainLinks.slice(1).filter(({ badge }) => badge !== 'notifications').map(({ to, label, icon: Icon, badge }) => (
               <NavLink className={({ isActive }) => `navbar-icon-link${isActive ? ' navbar-icon-active' : ''}`} to={to} aria-label={label} title={label} key={to}>
                 <Icon size={19} strokeWidth={1.8} />
-                <CountBadge count={counts.data?.[badge] ?? 0} />
+                <CountBadge count={countFor(badge)} />
               </NavLink>
             ))}
             <Suspense fallback={<NavLink className="navbar-icon-link" to="/notifications" aria-label="Notifications" title="Notifications"><Bell size={19} strokeWidth={1.8} /><CountBadge count={counts.data?.notifications ?? 0} /></NavLink>}>
@@ -233,7 +266,7 @@ export function MainLayout({ dark, onToggleTheme }) {
           <nav className="mobile-drawer" aria-label="Main navigation">
             {mainLinks.map(({ to, label, icon: Icon, badge, end }) => (
               <NavLink end={end} to={to} key={to} onClick={() => setMobileMenuOpen(false)} className={({ isActive }) => `sidebar-link${isActive ? ' sidebar-link-active' : ''}`}>
-                <Icon size={19} /><span>{label}</span>{badge && <CountBadge count={counts.data?.[badge] ?? 0} />}
+                <Icon size={19} /><span>{label}</span>{badge && <CountBadge count={countFor(badge)} />}
               </NavLink>
             ))}
             <NavLink to="/profile" className="sidebar-link" onClick={() => setMobileMenuOpen(false)}><UsersRound size={19} /><span>My Profile</span></NavLink>
@@ -247,7 +280,7 @@ export function MainLayout({ dark, onToggleTheme }) {
           <nav className="sidebar-nav">
             {mainLinks.map(({ to, label, icon: Icon, badge, end }) => (
               <NavLink end={end} to={to} key={to} className={({ isActive }) => `sidebar-link${isActive ? ' sidebar-link-active' : ''}`}>
-                <Icon size={19} strokeWidth={1.8} /><span>{label}</span>{badge && <CountBadge count={counts.data?.[badge] ?? 0} />}
+                <Icon size={19} strokeWidth={1.8} /><span>{label}</span>{badge && <CountBadge count={countFor(badge)} />}
               </NavLink>
             ))}
           </nav>
@@ -263,7 +296,7 @@ export function MainLayout({ dark, onToggleTheme }) {
       <nav className="mobile-tab-bar" aria-label="Mobile navigation">
         {mainLinks.map(({ to, label, icon: Icon, badge, end }) => (
           <NavLink end={end} to={to} key={to} className={({ isActive }) => `mobile-tab${isActive ? ' mobile-tab-active' : ''}`}>
-            <span className="mobile-tab-icon"><Icon size={21} strokeWidth={1.8} />{badge && <CountBadge count={counts.data?.[badge] ?? 0} />}</span>
+            <span className="mobile-tab-icon"><Icon size={21} strokeWidth={1.8} />{badge && <CountBadge count={countFor(badge)} />}</span>
             <span>{label}</span>
           </NavLink>
         ))}

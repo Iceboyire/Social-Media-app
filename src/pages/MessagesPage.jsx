@@ -47,7 +47,7 @@ async function fetchConversations(userId) {
   }
   const latestAndUnread = await Promise.all(memberships.map(async (membership) => {
     const latestQuery = supabase.from('messages')
-      .select('id, conversation_id, sender_id, body, image_url, created_at')
+      .select('id, conversation_id, sender_id, body, image_url, message_type, created_at')
       .eq('conversation_id', membership.conversation_id)
       .order('created_at', { ascending: false })
       .limit(1)
@@ -220,7 +220,7 @@ export function MessagesPage() {
                   : <Avatar src={leadProfile?.photo_url} name={leadProfile?.name || 'Member'} size="md" online={Boolean(online)} ring={Boolean(online)} />}
                 <span className="people-row-copy">
                   <strong>{conversationName(conversation)}</strong>
-                  <small className={typingNow ? 'message-row-typing' : ''}>{typingNow ? 'typing…' : latest?.body || (latest?.image_url ? 'Photo' : 'No messages yet')}</small>
+                  <small className={typingNow ? 'message-row-typing' : ''}>{typingNow ? 'typing…' : latest?.message_type === 'plan' ? `Plan: ${latest.body}` : latest?.body || (latest?.image_url ? 'Photo' : 'No messages yet')}</small>
                 </span>
                 <span className="message-row-meta">
                   <small>{latest && conversationTime(latest.created_at)}</small>

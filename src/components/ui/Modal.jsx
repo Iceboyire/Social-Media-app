@@ -2,7 +2,7 @@ import { useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 
-export function Modal({ open, onClose, title, children, size = 'md' }) {
+export function Modal({ open, onClose, title, children, size = 'md', className = '', backdropClassName = '' }) {
   useEffect(() => {
     if (!open) return undefined;
     function onKeyDown(event) {
@@ -14,10 +14,10 @@ export function Modal({ open, onClose, title, children, size = 'md' }) {
 
   if (!open) return null;
   return createPortal(
-    <div className="ui-modal-backdrop" onMouseDown={(event) => {
+    <div className={`ui-modal-backdrop ${backdropClassName}`.trim()} onMouseDown={(event) => {
       if (event.target === event.currentTarget) onClose?.();
     }}>
-      <section className={`ui-modal ui-modal-${size}`} role="dialog" aria-modal="true" aria-labelledby="ui-modal-title">
+      <section className={`ui-modal ui-modal-${size} ${className}`.trim()} role="dialog" aria-modal="true" aria-labelledby="ui-modal-title">
         <header className="ui-modal-header">
           <h2 id="ui-modal-title">{title}</h2>
           <button className="ui-icon-button" type="button" aria-label="Close dialog" onClick={onClose}><X size={19} /></button>

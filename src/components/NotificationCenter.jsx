@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Bell, Check, CheckCheck, MessageCircle, ShieldAlert, UserPlus, UsersRound } from 'lucide-react';
+import { Bell, CalendarDays, Check, CheckCheck, MessageCircle, ShieldAlert, UserPlus, UsersRound } from 'lucide-react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { invalidateFriendshipQueries } from '../hooks/useFriendshipRealtime';
@@ -19,6 +19,15 @@ const notificationCopy = {
   new_message: 'sent you a message',
   group_invite: 'added you to a group',
   admin_warning: 'issued you an account warning',
+  plan_created: 'created a plan',
+  plan_updated: 'updated a plan',
+  plan_cancelled: 'cancelled a plan',
+  plan_response: 'responded to your plan',
+  plan_reminder: 'has an upcoming plan',
+  plan_nudge: 'is waiting for your response',
+  poll_created: 'created an availability poll',
+  poll_closed: 'closed an availability poll',
+  poll_vote: 'voted in your availability poll',
 };
 
 const notificationIcon = {
@@ -27,6 +36,15 @@ const notificationIcon = {
   new_message: MessageCircle,
   group_invite: UsersRound,
   admin_warning: ShieldAlert,
+  plan_created: CalendarDays,
+  plan_updated: CalendarDays,
+  plan_cancelled: CalendarDays,
+  plan_response: CalendarDays,
+  plan_reminder: CalendarDays,
+  plan_nudge: CalendarDays,
+  poll_created: CalendarDays,
+  poll_closed: CalendarDays,
+  poll_vote: CalendarDays,
 };
 
 function getTimeGroup(timestamp) {
@@ -74,21 +92,31 @@ async function fetchNotifications(userId) {
   const actorIds = [...new Set(notifications.map((item) => item.actor_id).filter(Boolean))];
   const messageIds = [...new Set(notifications.filter((item) => item.type === 'new_message').map((item) => item.reference_id).filter(Boolean))];
   const invitedConversationIds = [...new Set(notifications.filter((item) => item.type === 'group_invite').map((item) => item.reference_id).filter(Boolean))];
+  const planIds = [...new Set(notifications.filter((item) => item.type.startsWith('plan_')).map((item) => item.reference_id).filter(Boolean))];
+  const pollIds = [...new Set(notifications.filter((item) => item.type.startsWith('poll_')).map((item) => item.reference_id).filter(Boolean))];
 
-  const [profilesResult, messagesResult] = await Promise.all([
+  const [profilesResult, messagesResult, plansResult, pollsResult] = await Promise.all([
     actorIds.length
       ? supabase.from('profiles').select('id, name, username, photo_url').in('id', actorIds)
       : Promise.resolve({ data: [], error: null }),
     messageIds.length
       ? supabase.from('messages').select('id, conversation_id').in('id', messageIds)
       : Promise.resolve({ data: [], error: null }),
+    planIds.length
+      ? supabase.from('plans').select('id, conversation_id, title, starts_at, status').in('id', planIds)
+      : Promise.resolve({ data: [], error: null }),
+    pollIds.length
+      ? supabase.from('time_polls').select('id, conversation_id, title, status').in('id', pollIds)
+      : Promise.resolve({ data: [], error: null }),
   ]);
-  for (const result of [profilesResult, messagesResult]) {
+  for (const result of [profilesResult, messagesResult, plansResult, pollsResult]) {
     if (result.error) throw result.error;
   }
 
   const messageConversationIds = (messagesResult.data ?? []).map((message) => message.conversation_id);
-  const conversationIds = [...new Set([...messageConversationIds, ...invitedConversationIds])];
+  const planConversationIds = (plansResult.data ?? []).map((plan) => plan.conversation_id);
+  const pollConversationIds = (pollsResult.data ?? []).map((poll) => poll.conversation_id);
+  const conversationIds = [...new Set([...messageConversationIds, ...invitedConversationIds, ...planConversationIds, ...pollConversationIds])];
   const conversationsResult = conversationIds.length
     ? await supabase.from('conversations').select('id, name, type').in('id', conversationIds)
     : { data: [], error: null };
@@ -96,17 +124,23 @@ async function fetchNotifications(userId) {
 
   const profiles = new Map((profilesResult.data ?? []).map((profile) => [profile.id, profile]));
   const messageConversations = new Map((messagesResult.data ?? []).map((message) => [message.id, message.conversation_id]));
+  const plans = new Map((plansResult.data ?? []).map((plan) => [plan.id, plan]));
+  const polls = new Map((pollsResult.data ?? []).map((poll) => [poll.id, poll]));
   const conversations = new Map((conversationsResult.data ?? []).map((conversation) => [conversation.id, conversation]));
 
   return notifications.map((item) => {
     const conversationId = item.type === 'new_message'
       ? messageConversations.get(item.reference_id)
-      : item.type === 'group_invite' ? item.reference_id : null;
+      : item.type === 'group_invite' ? item.reference_id
+        : item.type.startsWith('poll_') ? polls.get(item.reference_id)?.conversation_id
+          : plans.get(item.reference_id)?.conversation_id;
     return {
       ...item,
       actor: profiles.get(item.actor_id),
       conversationId,
       conversation: conversationId ? conversations.get(conversationId) : undefined,
+      plan: item.type.startsWith('plan_') ? plans.get(item.reference_id) : undefined,
+      poll: item.type.startsWith('poll_') ? polls.get(item.reference_id) : undefined,
     };
   });
 }
@@ -121,7 +155,7 @@ export function useNotificationsQuery() {
   });
 }
 
-function NotificationFeed({ notifications, loading, error, compact = false, onNavigate, onMarkRead, onRequestAction, busyId }) {
+function NotificationFeed({ notifications, loading, error, compact = false, onNavigate, onMarkRead, onRequestAction, onPlanResponse, busyId }) {
   const groups = useMemo(() => {
     const grouped = new Map();
     for (const notification of notifications) {
@@ -147,7 +181,9 @@ function NotificationFeed({ notifications, loading, error, compact = false, onNa
       {!compact && <h2 className="notification-group-title">{group}</h2>}
       {items.map((notification) => {
         const Icon = notificationIcon[notification.type] ?? Bell;
-        const target = notification.type === 'admin_warning'
+        const target = (notification.type.startsWith('plan_') || notification.type.startsWith('poll_')) && notification.conversationId
+          ? `/messages/${notification.conversationId}`
+          : notification.type === 'admin_warning'
           ? '/settings'
           : notification.type === 'friend_request'
           ? '/requests'
@@ -176,6 +212,8 @@ function NotificationFeed({ notifications, loading, error, compact = false, onNa
                 {notification.type === 'new_message' && notification.conversation?.type === 'group' && (
                   <small className="notification-context">{notification.conversation.name}</small>
                 )}
+                {(notification.plan?.title || notification.poll?.title) && <small className="notification-context">{notification.plan?.title || notification.poll?.title}</small>}
+                {notification.type === 'plan_reminder' && notification.plan?.starts_at && <small className="notification-context">Starts {relativeTime(notification.plan.starts_at)}</small>}
                 <small>{relativeTime(notification.created_at)}</small>
               </span>
             </Link>
@@ -183,6 +221,12 @@ function NotificationFeed({ notifications, loading, error, compact = false, onNa
               <span className="notification-request-actions">
                 <Button size="sm" onClick={() => onRequestAction(notification, true)} loading={busyId === notification.id} aria-label="Accept friend request"><Check size={14} />Accept</Button>
                 <Button size="sm" variant="secondary" disabled={Boolean(busyId)} onClick={() => onRequestAction(notification, false)} aria-label="Decline friend request">Decline</Button>
+              </span>
+            )}
+            {notification.type === 'plan_nudge' && notification.plan?.status === 'active' && (
+              <span className="notification-request-actions">
+                <Button size="sm" onClick={() => onPlanResponse(notification, 'going')} loading={busyId === notification.id} aria-label="Mark plan as going">Going</Button>
+                <Button size="sm" variant="secondary" disabled={Boolean(busyId)} onClick={() => onPlanResponse(notification, 'declined')} aria-label="Decline plan">Can’t</Button>
               </span>
             )}
             {!notification.is_read && <i className="unread-dot" aria-label="Unread notification" />}
@@ -218,19 +262,32 @@ export function NotificationBell({ count = 0 }) {
       }, (payload) => {
         queryClient.invalidateQueries({ queryKey: ['notifications', user.id] });
         queryClient.invalidateQueries({ queryKey: ['app-counts', user.id] });
+        let browserAlertsEnabled = false;
+        try {
+          browserAlertsEnabled = window.localStorage.getItem('gather-browser-notifications') === 'true';
+        } catch {
+          browserAlertsEnabled = false;
+        }
         if (
           payload.eventType === 'INSERT'
-          && payload.new?.type === 'new_message'
+          && ['new_message', 'plan_reminder', 'plan_nudge'].includes(payload.new?.type)
           && document.visibilityState === 'hidden'
           && typeof window !== 'undefined'
           && 'Notification' in window
+          && browserAlertsEnabled
           && window.Notification.permission === 'granted'
         ) {
-          const browserNotification = new window.Notification('New message', { body: 'You received a new message.' });
+          const titles = { new_message: 'New message', plan_reminder: 'Plan reminder', plan_nudge: 'Plan response needed' };
+          const descriptions = {
+            new_message: 'You received a new message.',
+            plan_reminder: 'You have a plan coming up.',
+            plan_nudge: 'Someone is waiting for your response to a plan.',
+          };
+          const browserNotification = new window.Notification(titles[payload.new.type], { body: descriptions[payload.new.type] });
           browserNotification.onclick = async () => {
             window.focus();
-            const { data, error } = await supabase
-              .from('messages')
+            const relation = payload.new.type === 'new_message' ? 'messages' : 'plans';
+            const { data, error } = await supabase.from(relation)
               .select('conversation_id')
               .eq('id', payload.new.reference_id)
               .maybeSingle();
@@ -315,12 +372,40 @@ export function NotificationBell({ count = 0 }) {
     }
   }
 
+  async function respondToPlan(notification, response) {
+    if (busyId || !notification.reference_id) return;
+    setBusyId(notification.id);
+    try {
+      const { error } = await supabase.rpc('respond_to_plan', { p_plan_id: notification.reference_id, p_response: response });
+      if (error) throw error;
+      await markRead(notification.id);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['notifications', user.id] }),
+        queryClient.invalidateQueries({ queryKey: ['app-counts', user.id] }),
+        queryClient.invalidateQueries({ queryKey: ['conversation-plans'] }),
+      ]);
+      toast(response === 'going' ? 'You’re going.' : 'You can’t make it.', 'success');
+    } catch (error) {
+      toast(error.message || 'Your plan response could not be saved.');
+    } finally {
+      setBusyId('');
+    }
+  }
+
   async function enableBrowserNotifications() {
     if (typeof window === 'undefined' || !('Notification' in window)) return;
     try {
       const result = await window.Notification.requestPermission();
       setPermission(result);
-      if (result === 'granted') toast('Desktop message alerts are enabled.', 'success');
+      if (result === 'granted') {
+        try {
+          window.localStorage.setItem('gather-browser-notifications', 'true');
+        } catch (error) {
+          toast(error.message || 'The browser notification preference could not be saved.');
+          return;
+        }
+        toast('Desktop message alerts are enabled.', 'success');
+      }
       else toast('Desktop notification permission was not granted.');
     } catch (error) {
       toast(error.message || 'Desktop notifications could not be enabled.');
@@ -359,6 +444,7 @@ export function NotificationBell({ count = 0 }) {
               onNavigate={() => setOpen(false)}
               onMarkRead={markRead}
               onRequestAction={respondToRequest}
+              onPlanResponse={respondToPlan}
               busyId={busyId}
             />
           </div>
@@ -423,6 +509,26 @@ export function NotificationsPageContent() {
     }
   }
 
+  async function respondToPlan(notification, response) {
+    if (busyId || !notification.reference_id) return;
+    setBusyId(notification.id);
+    try {
+      const { error } = await supabase.rpc('respond_to_plan', { p_plan_id: notification.reference_id, p_response: response });
+      if (error) throw error;
+      await markRead(notification.id);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['notifications', user.id] }),
+        queryClient.invalidateQueries({ queryKey: ['app-counts', user.id] }),
+        queryClient.invalidateQueries({ queryKey: ['conversation-plans'] }),
+      ]);
+      toast(response === 'going' ? 'You’re going.' : 'You can’t make it.', 'success');
+    } catch (error) {
+      toast(error.message || 'Your plan response could not be saved.');
+    } finally {
+      setBusyId('');
+    }
+  }
+
   return (
     <div className="app-page-content">
       <AppPageHeader
@@ -438,6 +544,7 @@ export function NotificationsPageContent() {
           error={query.error}
           onMarkRead={markRead}
           onRequestAction={respondToRequest}
+          onPlanResponse={respondToPlan}
           busyId={busyId}
         />
       </div>

@@ -16,6 +16,7 @@ import { EmptyState } from '../components/ui/EmptyState';
 import { Skeleton } from '../components/ui/Skeleton';
 import { supabase } from '../lib/supabase';
 import { invalidateFriendshipQueries } from '../hooks/useFriendshipRealtime';
+import { useAvailability } from '../hooks/useAvailability';
 
 export function SettingsPage({ dark, onToggleTheme, editProfile = false }) {
   const { user } = useAuth();
@@ -40,6 +41,56 @@ export function SettingsPage({ dark, onToggleTheme, editProfile = false }) {
   const [photoChanged, setPhotoChanged] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const { own: availability } = useAvailability();
+  const [visibilitySaving, setVisibilitySaving] = useState(false);
+  const [browserNotifications, setBrowserNotifications] = useState(() => {
+    try {
+      return localStorage.getItem('gather-browser-notifications') === 'true';
+    } catch {
+      return false;
+    }
+  });
+
+  async function toggleBrowserNotifications(event) {
+    const enabled = event.target.checked;
+    if (enabled && typeof window !== 'undefined' && 'Notification' in window) {
+      try {
+        const permission = await window.Notification.requestPermission();
+        if (permission !== 'granted') {
+          toast('Browser notification permission was not granted.');
+          return;
+        }
+      } catch (notificationError) {
+        toast(notificationError.message || 'Browser notifications could not be enabled.');
+        return;
+      }
+    } else if (enabled) {
+      toast('This browser does not support desktop notifications.');
+      return;
+    }
+    try {
+      localStorage.setItem('gather-browser-notifications', String(enabled));
+      setBrowserNotifications(enabled);
+      toast(enabled ? 'Browser notifications are enabled.' : 'Browser notifications are disabled.', 'success');
+    } catch (storageError) {
+      toast(storageError.message || 'The notification preference could not be saved.');
+    }
+  }
+
+  async function toggleStatusVisibility(event) {
+    const hidden = event.target.checked;
+    setVisibilitySaving(true);
+    try {
+      const { error: visibilityError } = await supabase.rpc('set_availability_hidden', { p_hidden: hidden });
+      if (visibilityError) throw visibilityError;
+      await queryClient.invalidateQueries({ queryKey: ['availability'] });
+      toast(hidden ? 'Your status is hidden from friends.' : 'Your status is visible to friends.', 'success');
+    } catch (visibilityError) {
+      toast(visibilityError.message || 'Status visibility could not be changed.');
+    } finally {
+      setVisibilitySaving(false);
+    }
+  }
 
   useEffect(() => {
     if (profileQuery.isError) toast(profileQuery.error.message || 'Your profile could not be loaded.');
@@ -160,6 +211,27 @@ export function SettingsPage({ dark, onToggleTheme, editProfile = false }) {
                 <Button type="submit" loading={saving}><Check size={16} /> Save profile</Button>
               </form>
           )}
+        </Card>
+        <Card className="settings-card">
+          <h2>Hangout status</h2>
+          <p className="settings-card-intro">Choose whether friends can see your active status.</p>
+          {availability.isLoading && <div className="list-skeleton"><Skeleton className="people-skeleton" /></div>}
+          {availability.isError && <div className="inline-alert" role="alert">{availability.error.message || 'Your status settings could not be loaded.'}</div>}
+          {availability.isSuccess && (
+            <label className="availability-privacy-toggle">
+              <span><strong>Hide my status from everyone</strong><small>This takes effect immediately and keeps your status when you make it visible again.</small></span>
+              <input type="checkbox" checked={Boolean(availability.data?.is_hidden)} disabled={visibilitySaving || !availability.data} onChange={toggleStatusVisibility} />
+            </label>
+          )}
+          {!availability.isLoading && !availability.isError && !availability.data && <p className="settings-card-intro">Set a status from the top bar to manage its visibility.</p>}
+        </Card>
+        <Card className="settings-card">
+          <h2>Notifications</h2>
+          <p className="settings-card-intro">Choose whether Gather can show browser alerts while it is open.</p>
+          <label className="availability-privacy-toggle">
+            <span><strong>Browser notifications</strong><small>Includes new messages and planning reminders.</small></span>
+            <input type="checkbox" checked={browserNotifications} onChange={toggleBrowserNotifications} />
+          </label>
         </Card>
         <div className="settings-side">
           <Card className="settings-card">
