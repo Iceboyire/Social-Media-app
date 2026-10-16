@@ -15,6 +15,8 @@ export function invalidateFriendshipQueries(queryClient, userId) {
     queryClient.invalidateQueries({ queryKey: ['user-search', userId] }),
     queryClient.invalidateQueries({ queryKey: ['public-profile'] }),
     queryClient.invalidateQueries({ queryKey: ['blocked-users', userId] }),
+    queryClient.invalidateQueries({ queryKey: ['conversation-details'] }),
+    queryClient.invalidateQueries({ queryKey: ['conversations', userId] }),
   ]);
 }
 
@@ -31,6 +33,11 @@ export function useFriendshipRealtime() {
         event: '*',
         schema: 'public',
         table: 'friendships',
+      }, () => { invalidateFriendshipQueries(queryClient, user.id); })
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'blocks',
       }, () => { invalidateFriendshipQueries(queryClient, user.id); })
       .subscribe((status) => {
         if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {

@@ -255,15 +255,20 @@ async function fetchConversation(conversationId, userId) {
   if (membershipError) throw membershipError;
   if (!membership) throw new Error('This conversation is not available to your account.');
 
-  const [{ data: conversation, error: conversationError }, { data: members, error: membersError }] = await Promise.all([
+  const [
+    { data: conversation, error: conversationError },
+    { data: members, error: membersError },
+    { data: allMembers, error: allMembersError },
+  ] = await Promise.all([
     supabase.from('conversations').select('id, type, name, photo_url').eq('id', conversationId).single(),
     supabase.from('conversation_members').select('user_id, role, joined_at, left_at, last_read_at').eq('conversation_id', conversationId).is('left_at', null),
+    supabase.from('conversation_members').select('user_id').eq('conversation_id', conversationId),
   ]);
-  for (const result of [{ error: conversationError }, { error: membersError }]) {
+  for (const result of [{ error: conversationError }, { error: membersError }, { error: allMembersError }]) {
     if (result.error) throw result.error;
   }
   const otherIds = [...new Set((members ?? []).map((member) => member.user_id).filter((id) => id !== userId))];
-  const profileIds = [...new Set((members ?? []).map((member) => member.user_id))];
+  const profileIds = [...new Set((allMembers ?? []).map((member) => member.user_id))];
   const profilesResponse = profileIds.length
     ? await supabase.from('profiles').select('id, name, username, photo_url, last_seen').in('id', profileIds)
     : { data: [], error: null };
@@ -281,6 +286,16 @@ async function fetchConversation(conversationId, userId) {
     if (blocksError) throw blocksError;
     isBlocked = Boolean(blocks?.length);
     canMessage = friendship?.status === 'accepted' && !isBlocked;
+  } else if (conversation.type === 'group') {
+    const { data: blocks, error: blocksError } = await supabase
+      .from('blocks')
+      .select('blocker_id, blocked_id')
+      .or(`blocker_id.eq.${userId},blocked_id.eq.${userId}`);
+    if (blocksError) throw blocksError;
+    isBlocked = (blocks ?? []).some((block) => (
+      otherIds.includes(block.blocker_id === userId ? block.blocked_id : block.blocker_id)
+    ));
+    canMessage = !isBlocked;
   } else if (conversation.type === 'direct') {
     canMessage = false;
   }
@@ -297,7 +312,7 @@ async function fetchConversation(conversationId, userId) {
 async function fetchMessagePage(conversationId, cursor) {
   let request = supabase
     .from('messages')
-    .select('id, sender_id, body, image_url, is_system, message_type, plan_id, created_at')
+    .select('id, sender_id, body, image_url, is_system, message_type, plan_id, poll_id, created_at')
     .eq('conversation_id', conversationId)
     .order('created_at', { ascending: false })
     .limit(PAGE_SIZE);
@@ -624,8 +639,13 @@ export function ConversationPage() {
     const pagesCount = messageQuery.data?.pages.length ?? 0;
     if (pagesCount > pageCountRef.current && preserveScrollRef.current !== null && listRef.current) {
       const scroller = listRef.current;
+      const previousScrollBehavior = scroller.style.scrollBehavior;
+      scroller.style.scrollBehavior = 'auto';
       scroller.scrollTop = scroller.scrollHeight - preserveScrollRef.current;
       preserveScrollRef.current = null;
+      window.requestAnimationFrame(() => {
+        scroller.style.scrollBehavior = previousScrollBehavior;
+      });
     } else if (pagesCount > 0 && pageCountRef.current === 0) {
       bottomRef.current?.scrollIntoView({ block: 'end' });
     } else if (wasAtBottomRef.current) {
@@ -729,7 +749,7 @@ export function ConversationPage() {
         sender_id: user.id,
         body: text || null,
         image_url: imagePath || null,
-      }).select('id, sender_id, body, image_url, is_system, message_type, plan_id, created_at').single();
+      }).select('id, sender_id, body, image_url, is_system, message_type, plan_id, poll_id, created_at').single();
       if (error) throw error;
       setOptimistic((current) => current.filter((message) => message.id !== optimisticId));
       queryClient.setQueryData(chatKey, (current) => {
@@ -1017,19 +1037,19 @@ export function ConversationPage() {
     } finally {
       setPlanSaving(false);
     }
+  }
 
-    async function nudgeUnconfirmed() {
-      if (!selectedPlan || nudgeBusy) return;
-      setNudgeBusy(true);
-      try {
-        const { data, error } = await supabase.rpc('nudge_unconfirmed', { p_plan_id: selectedPlan.id });
-        if (error) throw error;
-        toast(`Nudge sent to ${data} ${data === 1 ? 'person' : 'people'}.`, 'success');
-      } catch (error) {
-        toast(error.message || 'Unconfirmed members could not be nudged.');
-      } finally {
-        setNudgeBusy(false);
-      }
+  async function nudgeUnconfirmed() {
+    if (!selectedPlan || nudgeBusy) return;
+    setNudgeBusy(true);
+    try {
+      const { data, error } = await supabase.rpc('nudge_unconfirmed', { p_plan_id: selectedPlan.id });
+      if (error) throw error;
+      toast(`Nudge sent to ${data} ${data === 1 ? 'person' : 'people'}.`, 'success');
+    } catch (error) {
+      toast(error.message || 'Unconfirmed members could not be nudged.');
+    } finally {
+      setNudgeBusy(false);
     }
   }
 
@@ -1299,7 +1319,7 @@ export function ConversationPage() {
             {planActionError && <p className="chat-plan-form-error" role="alert">{planActionError}</p>}
             <div className="chat-plan-detail-actions">
               <Button variant="secondary" onClick={() => downloadPlanCalendarFile(selectedPlan)}><CalendarPlus size={15} />Add to calendar</Button>
-              {selectedPlan.created_by === user.id && selectedPlan.status === 'active' && new Date(selectedPlan.starts_at) > new Date() && <Button variant="secondary" loading={nudgeBusy} onClick={nudgeUnconfirmed}>Nudge unconfirmed</Button>}
+              {canManageSelectedPlan && selectedPlan.created_by === user.id && selectedPlan.status === 'active' && new Date(selectedPlan.starts_at) > new Date() && <Button variant="secondary" loading={nudgeBusy} onClick={nudgeUnconfirmed}>Nudge unconfirmed</Button>}
               {canManageSelectedPlan && selectedPlan.status === 'active' && <Button variant="secondary" onClick={() => beginPlanEdit(selectedPlan)}>Edit</Button>}
               {canManageSelectedPlan && selectedPlan.status === 'active' && <Button variant="danger" loading={planSaving} onClick={cancelSelectedPlan}>Cancel plan</Button>}
             </div>
