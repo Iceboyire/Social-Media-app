@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowDown, ArrowLeft, CalendarDays, CalendarPlus, Check, CheckCheck, Clock3, ImagePlus, LoaderCircle, MapPin, MoreHorizontal, Plus, Send, Smile, UsersRound, X } from 'lucide-react';
+import { ArrowDown, ArrowLeft, Bookmark, CalendarDays, CalendarPlus, Check, CheckCheck, Clock3, ImagePlus, LoaderCircle, MapPin, Mic, MoreHorizontal, Pencil, Pin, Plus, Receipt, Reply, Send, ShoppingBasket, Smile, Square, Trash2, UsersRound, X } from 'lucide-react';
 import EmojiPicker from 'emoji-picker-react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { Avatar } from '../components/ui/Avatar';
@@ -17,6 +17,9 @@ import { useAvailability } from '../hooks/useAvailability';
 const PAGE_SIZE = 30;
 const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
 const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+const REACTION_CHOICES = ['👍', '❤️', '😂', '😮', '😢', '🎉'];
+const MAX_VOICE_NOTE_SIZE = 5 * 1024 * 1024;
+const MAX_VOICE_NOTE_SECONDS = 120;
 const PLAN_RESPONSES = [
   { value: 'going', label: 'Going', shortLabel: 'Going' },
   { value: 'maybe', label: 'Maybe', shortLabel: 'Maybe' },
@@ -54,6 +57,47 @@ async function fetchConversationPlans(conversationId) {
     responses: responses ?? [],
     profiles: Object.fromEntries((profiles ?? []).map((profile) => [profile.id, profile])),
   };
+}
+
+async function fetchPlanExtras(planId) {
+  if (!planId) return { items: [], costs: [], profiles: {} };
+  const [{ data: items, error: itemsError }, { data: costs, error: costsError }] = await Promise.all([
+    supabase
+      .from('plan_bring_items')
+      .select('id, plan_id, item, created_by, is_brought, brought_by, brought_at, created_at')
+      .eq('plan_id', planId)
+      .order('created_at', { ascending: true }),
+    supabase
+      .from('plan_costs')
+      .select('id, plan_id, amount, currency, note, paid_by, created_at')
+      .eq('plan_id', planId)
+      .order('created_at', { ascending: true }),
+  ]);
+  if (itemsError) throw itemsError;
+  if (costsError) throw costsError;
+  const profileIds = [...new Set([
+    ...(items ?? []).flatMap((item) => [item.created_by, item.brought_by].filter(Boolean)),
+    ...(costs ?? []).map((cost) => cost.paid_by),
+  ])];
+  const { data: profiles, error: profilesError } = profileIds.length
+    ? await supabase.from('profiles').select('id, name').in('id', profileIds)
+    : { data: [], error: null };
+  if (profilesError) throw profilesError;
+  return {
+    items: items ?? [],
+    costs: costs ?? [],
+    profiles: Object.fromEntries((profiles ?? []).map((profile) => [profile.id, profile])),
+  };
+}
+
+async function fetchChatMemories(conversationId) {
+  const { data, error } = await supabase
+    .from('chat_memories')
+    .select('id, message_id, created_at, message:messages!chat_memories_message_id_fkey(id, sender_id, body, image_url, voice_path, created_at, deleted_at, expires_at)')
+    .eq('conversation_id', conversationId)
+    .order('created_at', { ascending: false });
+  if (error) throw error;
+  return data ?? [];
 }
 
 async function fetchConversationPolls(conversationId) {
@@ -312,7 +356,7 @@ async function fetchConversation(conversationId, userId) {
 async function fetchMessagePage(conversationId, cursor) {
   let request = supabase
     .from('messages')
-    .select('id, sender_id, body, image_url, is_system, message_type, plan_id, poll_id, created_at')
+    .select('id, sender_id, body, image_url, voice_path, is_system, message_type, plan_id, poll_id, reply_to_message_id, edited_at, deleted_at, expires_at, created_at')
     .eq('conversation_id', conversationId)
     .order('created_at', { ascending: false })
     .limit(PAGE_SIZE);
@@ -324,6 +368,28 @@ async function fetchMessagePage(conversationId, cursor) {
     messages: descending.reverse(),
     nextCursor: descending.length === PAGE_SIZE ? descending[0].created_at : undefined,
   };
+}
+
+function ChatVoiceNote({ path }) {
+  const [url, setUrl] = useState('');
+  const [error, setError] = useState('');
+  useEffect(() => {
+    let active = true;
+    if (!path) return undefined;
+    supabase.storage.from('chat-voice-notes').createSignedUrl(path, 60 * 60)
+      .then(({ data, error: signedUrlError }) => {
+        if (!active) return;
+        if (signedUrlError) setError(signedUrlError.message);
+        else setUrl(data.signedUrl);
+      }).catch((signedUrlError) => {
+        if (active) setError(signedUrlError.message || 'Voice note unavailable');
+      });
+    return () => { active = false; };
+  }, [path]);
+  if (error) return <span className="chat-image-error">Voice note unavailable</span>;
+  return url
+    ? <audio className="chat-voice-player" controls preload="metadata" src={url}>Your browser cannot play this voice note.</audio>
+    : <span className="chat-image-loading"><LoaderCircle size={16} /></span>;
 }
 
 function ChatImage({ path, alt, onImageClick }) {
@@ -370,6 +436,13 @@ export function ConversationPage() {
   const [body, setBody] = useState('');
   const [optimistic, setOptimistic] = useState([]);
   const [pendingImage, setPendingImage] = useState(null);
+  const [replyTo, setReplyTo] = useState(null);
+  const [editingMessageId, setEditingMessageId] = useState('');
+  const [editDraft, setEditDraft] = useState('');
+  const [messageActionBusy, setMessageActionBusy] = useState('');
+  const [voiceRecording, setVoiceRecording] = useState(false);
+  const [voiceSending, setVoiceSending] = useState(false);
+  const [voiceSeconds, setVoiceSeconds] = useState(0);
   const [sending, setSending] = useState(false);
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [showScrollBottom, setShowScrollBottom] = useState(false);
@@ -392,6 +465,21 @@ export function ConversationPage() {
   const [planLocation, setPlanLocation] = useState('');
   const [planStart, setPlanStart] = useState('');
   const [planEnd, setPlanEnd] = useState('');
+  const [bringItemDraft, setBringItemDraft] = useState('');
+  const [costAmountDraft, setCostAmountDraft] = useState('');
+  const [costCurrencyDraft, setCostCurrencyDraft] = useState('GBP');
+  const [costNoteDraft, setCostNoteDraft] = useState('');
+  const [planExtrasBusy, setPlanExtrasBusy] = useState('');
+  const [planExtrasError, setPlanExtrasError] = useState('');
+  const [planExtrasRealtimeError, setPlanExtrasRealtimeError] = useState('');
+  const [showMemories, setShowMemories] = useState(false);
+  const [memoryBusy, setMemoryBusy] = useState('');
+  const [memoryError, setMemoryError] = useState('');
+  const [locationMinutes, setLocationMinutes] = useState(15);
+  const [locationSharing, setLocationSharing] = useState(false);
+  const [locationError, setLocationError] = useState('');
+  const [locationRealtimeError, setLocationRealtimeError] = useState('');
+  const [lastLocationUpdated, setLastLocationUpdated] = useState(null);
   const [createPollOpen, setCreatePollOpen] = useState(false);
   const [gatherOffer, setGatherOffer] = useState(false);
   const [pollTitle, setPollTitle] = useState('');
@@ -412,7 +500,18 @@ export function ConversationPage() {
   const preserveScrollRef = useRef(null);
   const pageCountRef = useRef(0);
   const imageInputRef = useRef(null);
+  const messageInputRef = useRef(null);
   const selectedImageUrlRef = useRef(null);
+  const voiceRecorderRef = useRef(null);
+  const voiceStreamRef = useRef(null);
+  const voiceChunksRef = useRef([]);
+  const voiceStartedAtRef = useRef(0);
+  const voiceTimerRef = useRef(null);
+  const locationWatchRef = useRef(null);
+  const locationExpiryTimerRef = useRef(null);
+  const locationSharingRef = useRef(false);
+  const locationLastUpdateRef = useRef(0);
+  const locationExpiresAtRef = useRef('');
   const chatKey = useMemo(() => ['conversation-messages', conversationId, user?.id], [conversationId, user?.id]);
 
   const conversationQuery = useQuery({
@@ -435,10 +534,65 @@ export function ConversationPage() {
     enabled: Boolean(conversationId && user?.id),
     retry: 1,
   });
+  const chatSettingsQuery = useQuery({
+    queryKey: ['conversation-chat-settings', conversationId],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('conversation_chat_settings')
+        .select('conversation_id, expires_in_seconds')
+        .eq('conversation_id', conversationId)
+        .maybeSingle();
+      if (error) throw error;
+      return data ?? { conversation_id: conversationId, expires_in_seconds: 0 };
+    },
+    enabled: Boolean(conversationId && user?.id),
+    retry: 1,
+  });
+  const pinnedMessageQuery = useQuery({
+    queryKey: ['conversation-pin', conversationId],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('conversation_pins')
+        .select('conversation_id, message_id, pinned_by, created_at, message:messages!conversation_pins_message_id_fkey(id, sender_id, body, image_url, voice_path, deleted_at, created_at)')
+        .eq('conversation_id', conversationId)
+        .maybeSingle();
+      if (error) throw error;
+      return data;
+    },
+    enabled: Boolean(conversationId && user?.id),
+    retry: 1,
+  });
   const plansQuery = useQuery({
     queryKey: ['conversation-plans', conversationId, user?.id],
     queryFn: () => fetchConversationPlans(conversationId),
     enabled: Boolean(conversationId && user?.id),
+    retry: 1,
+  });
+  const memoriesQuery = useQuery({
+    queryKey: ['chat-memories', conversationId, user?.id],
+    queryFn: () => fetchChatMemories(conversationId),
+    enabled: Boolean(conversationId && user?.id),
+    retry: 1,
+  });
+  const liveLocationsQuery = useQuery({
+    queryKey: ['live-locations', conversationId, user?.id],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('live_locations')
+        .select('conversation_id, user_id, latitude, longitude, expires_at, updated_at')
+        .eq('conversation_id', conversationId)
+        .gt('expires_at', new Date().toISOString())
+        .order('updated_at', { ascending: false });
+      if (error) throw error;
+      return data ?? [];
+    },
+    enabled: Boolean(conversationId && user?.id),
+    retry: 1,
+  });
+  const planExtrasQuery = useQuery({
+    queryKey: ['plan-extras', selectedPlanId, user?.id],
+    queryFn: () => fetchPlanExtras(selectedPlanId),
+    enabled: Boolean(selectedPlanId && user?.id),
     retry: 1,
   });
   const pollsQuery = useQuery({
@@ -467,6 +621,90 @@ export function ConversationPage() {
     enabled: Boolean(conversationId && user?.id),
     retry: 1,
   });
+  useEffect(() => {
+    if (!selectedPlanId || !user?.id) return undefined;
+    let active = true;
+    const channel = supabase.channel(`plan-extras:${selectedPlanId}:${user.id}`)
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'plan_bring_items',
+        filter: `plan_id=eq.${selectedPlanId}`,
+      }, () => queryClient.invalidateQueries({ queryKey: ['plan-extras', selectedPlanId, user.id] }))
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'plan_costs',
+        filter: `plan_id=eq.${selectedPlanId}`,
+      }, () => queryClient.invalidateQueries({ queryKey: ['plan-extras', selectedPlanId, user.id] }))
+      .subscribe((status) => {
+        if (active && (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT')) {
+          setPlanExtrasRealtimeError('Live plan updates are unavailable. Refresh the plan details to check for changes.');
+        } else if (active && status === 'SUBSCRIBED') {
+          setPlanExtrasRealtimeError('');
+        }
+      });
+    return () => {
+      active = false;
+      supabase.removeChannel(channel);
+    };
+  }, [selectedPlanId, user?.id, queryClient]);
+  useEffect(() => {
+    setBringItemDraft('');
+    setCostAmountDraft('');
+    setCostCurrencyDraft('GBP');
+    setCostNoteDraft('');
+    setPlanExtrasError('');
+    setPlanExtrasRealtimeError('');
+  }, [selectedPlanId]);
+  useEffect(() => {
+    if (!conversationId || !user?.id) return undefined;
+    let active = true;
+    const channel = supabase.channel(`conversation-live-data:${conversationId}:${user.id}`)
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'chat_memories',
+      }, () => queryClient.invalidateQueries({ queryKey: ['chat-memories', conversationId, user.id] }))
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'live_locations',
+        filter: `conversation_id=eq.${conversationId}`,
+      }, () => queryClient.invalidateQueries({ queryKey: ['live-locations', conversationId, user.id] }))
+      .subscribe((status) => {
+        if (!active) return;
+        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          setLocationRealtimeError('Live updates for memories or locations are unavailable. Refresh to check for changes.');
+        } else if (status === 'SUBSCRIBED') {
+          setLocationRealtimeError('');
+        }
+      });
+    return () => {
+      active = false;
+      supabase.removeChannel(channel);
+    };
+  }, [conversationId, user?.id, queryClient]);
+  useEffect(() => {
+    locationSharingRef.current = locationSharing;
+  }, [locationSharing]);
+  useEffect(() => () => {
+    const shouldStopLocation = locationSharingRef.current;
+    locationSharingRef.current = false;
+    if (locationWatchRef.current !== null && navigator.geolocation) {
+      navigator.geolocation.clearWatch(locationWatchRef.current);
+      locationWatchRef.current = null;
+    }
+    if (locationExpiryTimerRef.current !== null) {
+      window.clearTimeout(locationExpiryTimerRef.current);
+      locationExpiryTimerRef.current = null;
+    }
+    if (shouldStopLocation && conversationId && user?.id) {
+      supabase.rpc('stop_live_location', { p_conversation_id: conversationId })
+        .then(({ error }) => { if (error) console.error('Could not stop live location on conversation exit.', error); })
+        .catch((error) => console.error('Could not stop live location on conversation exit.', error));
+    }
+  }, [conversationId, user?.id]);
   const { friends: availabilityFriends } = useAvailability();
 
   const serverMessages = useMemo(
@@ -478,6 +716,24 @@ export function ConversationPage() {
     optimistic.forEach((message) => byId.set(message.id, message));
     return [...byId.values()].sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
   }, [serverMessages, optimistic]);
+  const messageIds = useMemo(
+    () => messages.map((message) => message.id).filter((id) => !String(id).startsWith('pending-')),
+    [messages],
+  );
+  const reactionsQuery = useQuery({
+    queryKey: ['message-reactions', conversationId, messageIds],
+    queryFn: async () => {
+      if (!messageIds.length) return [];
+      const { data, error } = await supabase
+        .from('message_reactions')
+        .select('message_id, user_id, emoji')
+        .in('message_id', messageIds);
+      if (error) throw error;
+      return data ?? [];
+    },
+    enabled: Boolean(conversationId && user?.id && messageIds.length),
+    retry: 1,
+  });
   const otherMembers = conversationQuery.data?.members.filter((member) => member.user_id !== user?.id) ?? [];
   const otherMember = otherMembers[0];
   const otherProfile = otherMember && conversationQuery.data?.profiles[otherMember.user_id];
@@ -497,7 +753,42 @@ export function ConversationPage() {
     if (selectedImageUrlRef.current) URL.revokeObjectURL(selectedImageUrlRef.current);
     window.clearTimeout(typingTimerRef.current);
     window.clearTimeout(incomingTypingTimerRef.current);
+    window.clearInterval(voiceTimerRef.current);
+    if (voiceRecorderRef.current) {
+      voiceRecorderRef.current.onstop = null;
+      voiceRecorderRef.current.ondataavailable = null;
+      if (voiceRecorderRef.current.state !== 'inactive') voiceRecorderRef.current.stop();
+    }
+    voiceStreamRef.current?.getTracks().forEach((track) => track.stop());
   }, []);
+
+  useEffect(() => {
+    if (!conversationId || !user?.id) return undefined;
+    let active = true;
+    async function removeExpiredAttachments() {
+      const { data: queuedObjects, error } = await supabase.rpc('take_expired_chat_objects');
+      if (error) throw error;
+      const removedPaths = [];
+      for (const bucket of ['chat-images', 'chat-voice-notes']) {
+        const paths = (queuedObjects ?? []).filter((object) => object.bucket_id === bucket).map((object) => object.object_path);
+        if (!paths.length) continue;
+        const { error: removalError } = await supabase.storage.from(bucket).remove(paths);
+        if (removalError) {
+          toast(`Expired attachments could not be fully cleaned up: ${removalError.message}`);
+          continue;
+        }
+        removedPaths.push(...paths);
+      }
+      if (removedPaths.length) {
+        const { error: acknowledgementError } = await supabase.rpc('ack_expired_chat_objects', { p_object_paths: removedPaths });
+        if (acknowledgementError) throw acknowledgementError;
+      }
+    }
+    removeExpiredAttachments().catch((error) => {
+      if (active) toast(error.message || 'Expired attachments could not be cleaned up.');
+    });
+    return () => { active = false; };
+  }, [conversationId, user?.id, toast]);
 
   useEffect(() => {
     function dismissHeaderMenu(event) {
@@ -571,6 +862,34 @@ export function ConversationPage() {
         queryClient.invalidateQueries({ queryKey: ['conversations', user.id] });
         if (wasAtBottomRef.current) window.requestAnimationFrame(() => bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' }));
       })
+      .on('postgres_changes', {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'messages',
+        filter: `conversation_id=eq.${conversationId}`,
+      }, () => queryClient.invalidateQueries({ queryKey: chatKey }))
+      .on('postgres_changes', {
+        event: 'DELETE',
+        schema: 'public',
+        table: 'messages',
+      }, () => queryClient.invalidateQueries({ queryKey: chatKey }))
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'message_reactions',
+      }, () => queryClient.invalidateQueries({ queryKey: ['message-reactions', conversationId] }))
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'conversation_chat_settings',
+        filter: `conversation_id=eq.${conversationId}`,
+      }, () => queryClient.invalidateQueries({ queryKey: ['conversation-chat-settings', conversationId] }))
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'conversation_pins',
+        filter: `conversation_id=eq.${conversationId}`,
+      }, () => queryClient.invalidateQueries({ queryKey: ['conversation-pin', conversationId] }))
       .on('postgres_changes', {
         event: '*',
         schema: 'public',
@@ -712,7 +1031,7 @@ export function ConversationPage() {
 
   async function sendMessage(event, retryMessage = null) {
     event?.preventDefault();
-    const text = retryMessage?.body ?? body.trim();
+    const text = retryMessage ? retryMessage.body ?? '' : body.trim();
     const image = retryMessage?.file ? pendingImage : pendingImage;
     if ((!text && !image) || sending || !conversationQuery.data?.canMessage) return;
     const optimisticId = retryMessage?.id ?? `pending-${crypto.randomUUID()}`;
@@ -722,6 +1041,7 @@ export function ConversationPage() {
       sender_id: user.id,
       body: text || null,
       image_url: image?.previewUrl ?? null,
+      reply_to_message_id: replyTo?.id ?? null,
       created_at: timestamp,
       optimistic: true,
       file: image?.file,
@@ -744,12 +1064,12 @@ export function ConversationPage() {
         item.path = imagePath;
         setPendingImage((current) => current ? { ...current, path: imagePath } : current);
       }
-      const { data, error } = await supabase.from('messages').insert({
-        conversation_id: conversationId,
-        sender_id: user.id,
-        body: text || null,
-        image_url: imagePath || null,
-      }).select('id, sender_id, body, image_url, is_system, message_type, plan_id, poll_id, created_at').single();
+      const { data, error } = await supabase.rpc('send_chat_message', {
+        p_conversation_id: conversationId,
+        p_body: text || null,
+        p_image_path: imagePath || null,
+        p_reply_to_message_id: retryMessage ? retryMessage.reply_to_message_id : replyTo?.id ?? null,
+      }).select('id, sender_id, body, image_url, voice_path, is_system, message_type, plan_id, poll_id, reply_to_message_id, edited_at, deleted_at, expires_at, created_at').single();
       if (error) throw error;
       setOptimistic((current) => current.filter((message) => message.id !== optimisticId));
       queryClient.setQueryData(chatKey, (current) => {
@@ -763,6 +1083,7 @@ export function ConversationPage() {
       });
       if (!retryMessage) {
         setBody('');
+        setReplyTo(null);
         if (selectedImageUrlRef.current) URL.revokeObjectURL(selectedImageUrlRef.current);
         selectedImageUrlRef.current = null;
         setPendingImage(null);
@@ -790,6 +1111,237 @@ export function ConversationPage() {
     } finally {
       setSending(false);
     }
+  }
+
+  async function toggleReaction(messageId, emoji) {
+    if (messageActionBusy || !messageState?.canMessage) return;
+    setMessageActionBusy(messageId);
+    try {
+      const { error } = await supabase.rpc('react_to_chat_message', { p_message_id: messageId, p_emoji: emoji });
+      if (error) throw error;
+      await queryClient.invalidateQueries({ queryKey: ['message-reactions', conversationId] });
+    } catch (error) {
+      toast(error.message || 'The reaction could not be saved.');
+    } finally {
+      setMessageActionBusy('');
+    }
+  }
+
+  async function saveEditedMessage(event, messageId) {
+    event.preventDefault();
+    if (messageActionBusy) return;
+    setMessageActionBusy(messageId);
+    try {
+      const { error } = await supabase.rpc('edit_chat_message', { p_message_id: messageId, p_body: editDraft });
+      if (error) throw error;
+      setEditingMessageId('');
+      setEditDraft('');
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: chatKey }),
+        queryClient.invalidateQueries({ queryKey: ['conversations', user.id] }),
+      ]);
+    } catch (error) {
+      toast(error.message || 'The message could not be edited.');
+    } finally {
+      setMessageActionBusy('');
+    }
+  }
+
+  async function deleteMessage(message) {
+    if (messageActionBusy || !window.confirm('Delete this message for everyone in the conversation?')) return;
+    setMessageActionBusy(message.id);
+    try {
+      const { data: objectPath, error } = await supabase.rpc('delete_chat_message', { p_message_id: message.id });
+      if (error) throw error;
+      setEditingMessageId('');
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: chatKey }),
+        queryClient.invalidateQueries({ queryKey: ['conversations', user.id] }),
+      ]);
+      if (objectPath) {
+        const bucket = message.voice_path ? 'chat-voice-notes' : 'chat-images';
+        const { error: removeError } = await supabase.storage.from(bucket).remove([objectPath]);
+        if (removeError) {
+          toast(`Message deleted, but its attachment remains queued for cleanup: ${removeError.message}`);
+        } else {
+          const { error: ackError } = await supabase.rpc('ack_expired_chat_objects', { p_object_paths: [objectPath] });
+          if (ackError) toast(`Message deleted, but attachment cleanup could not be recorded: ${ackError.message}`);
+        }
+      }
+    } catch (error) {
+      toast(error.message || 'The message could not be deleted.');
+    } finally {
+      setMessageActionBusy('');
+    }
+  }
+
+  async function togglePin(message) {
+    if (messageActionBusy || !messageState?.canMessage) return;
+    setMessageActionBusy(message.id);
+    try {
+      const pinned = pinnedMessageQuery.data?.message_id === message.id;
+      const { error } = pinned
+        ? await supabase.rpc('unpin_chat_message', { p_conversation_id: conversationId })
+        : await supabase.rpc('pin_chat_message', { p_message_id: message.id });
+      if (error) throw error;
+      await queryClient.invalidateQueries({ queryKey: ['conversation-pin', conversationId] });
+    } catch (error) {
+      toast(error.message || 'The pinned message could not be updated.');
+    } finally {
+      setMessageActionBusy('');
+    }
+  }
+
+  async function changeChatExpiry(event) {
+    const expiresInSeconds = Number(event.target.value);
+    try {
+      const { error } = await supabase.rpc('set_chat_expiry', {
+        p_conversation_id: conversationId,
+        p_expires_in_seconds: expiresInSeconds,
+      });
+      if (error) throw error;
+      await queryClient.invalidateQueries({ queryKey: ['conversation-chat-settings', conversationId] });
+      toast(expiresInSeconds ? 'Disappearing messages updated for new messages.' : 'Disappearing messages turned off for new messages.', 'success');
+    } catch (error) {
+      toast(error.message || 'The message expiry could not be updated.');
+    }
+  }
+
+  async function sendRecordedVoice(blob, mimeType) {
+    if (!messageState?.canMessage || voiceSending) return;
+    if (!blob.size || blob.size > MAX_VOICE_NOTE_SIZE) {
+      toast('Voice notes must be smaller than 5 MB. Try a shorter recording.');
+      return;
+    }
+    const allowedTypes = ['audio/webm', 'audio/mp4', 'audio/ogg', 'audio/mpeg', 'audio/wav'];
+    if (!allowedTypes.includes(mimeType)) {
+      toast('This browser recorded an unsupported audio format.');
+      return;
+    }
+    const extension = { 'audio/webm': 'webm', 'audio/mp4': 'm4a', 'audio/ogg': 'ogg', 'audio/mpeg': 'mp3', 'audio/wav': 'wav' }[mimeType];
+    const path = `${user.id}/${conversationId}/${crypto.randomUUID()}.${extension}`;
+    setVoiceSending(true);
+    let uploaded = false;
+    try {
+      const { error: uploadError } = await supabase.storage.from('chat-voice-notes').upload(path, blob, {
+        contentType: mimeType,
+        upsert: false,
+      });
+      if (uploadError) throw uploadError;
+      uploaded = true;
+      const { data, error } = await supabase.rpc('send_chat_voice_note', {
+        p_conversation_id: conversationId,
+        p_voice_path: path,
+        p_reply_to_message_id: replyTo?.id ?? null,
+      }).select('id, sender_id, body, image_url, voice_path, is_system, message_type, plan_id, poll_id, reply_to_message_id, edited_at, deleted_at, expires_at, created_at').single();
+      if (error) throw error;
+      queryClient.setQueryData(chatKey, (current) => {
+        if (!current?.pages?.length || current.pages.some((page) => page.messages.some((message) => message.id === data.id))) return current;
+        return {
+          ...current,
+          pages: current.pages.map((page, index) => index === 0
+            ? { ...page, messages: [...page.messages, data].sort((a, b) => new Date(a.created_at) - new Date(b.created_at)) }
+            : page),
+        };
+      });
+      setReplyTo(null);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['conversations', user.id] }),
+        markRead(),
+      ]);
+      window.requestAnimationFrame(() => bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' }));
+    } catch (error) {
+      if (uploaded) {
+        const { error: cleanupError } = await supabase.storage.from('chat-voice-notes').remove([path]);
+        if (cleanupError) toast(`Voice note was not sent, and its upload could not be removed: ${cleanupError.message}`);
+      }
+      toast(error.message || 'The voice note could not be sent.');
+    } finally {
+      setVoiceSending(false);
+    }
+  }
+
+  async function startVoiceRecording() {
+    if (voiceRecording || voiceSending || !messageState?.canMessage) return;
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+      toast('Voice recording is not supported in this browser.');
+      return;
+    }
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mimeType = ['audio/webm', 'audio/mp4', 'audio/ogg', 'audio/mpeg', 'audio/wav']
+        .find((type) => MediaRecorder.isTypeSupported(type));
+      const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+      voiceStreamRef.current = stream;
+      voiceRecorderRef.current = recorder;
+      voiceChunksRef.current = [];
+      voiceStartedAtRef.current = Date.now();
+      recorder.ondataavailable = (event) => {
+        if (event.data.size) voiceChunksRef.current.push(event.data);
+      };
+      recorder.onerror = () => {
+        window.clearInterval(voiceTimerRef.current);
+        voiceTimerRef.current = null;
+        recorder.onstop = null;
+        stream.getTracks().forEach((track) => track.stop());
+        voiceRecorderRef.current = null;
+        voiceStreamRef.current = null;
+        setVoiceRecording(false);
+        toast('The voice recording failed. Please try again.');
+      };
+      recorder.onstop = () => {
+        window.clearInterval(voiceTimerRef.current);
+        voiceTimerRef.current = null;
+        const detectedType = (recorder.mimeType || mimeType || '').split(';')[0];
+        const recording = new Blob(voiceChunksRef.current, { type: detectedType });
+        stream.getTracks().forEach((track) => track.stop());
+        voiceStreamRef.current = null;
+        voiceRecorderRef.current = null;
+        setVoiceRecording(false);
+        if (recording.size) sendRecordedVoice(recording, detectedType);
+        else toast('No audio was recorded. Please try again.');
+      };
+      recorder.start();
+      setVoiceRecording(true);
+      setVoiceSeconds(0);
+      voiceTimerRef.current = window.setInterval(() => {
+        const elapsed = Math.floor((Date.now() - voiceStartedAtRef.current) / 1000);
+        setVoiceSeconds(elapsed);
+        if (elapsed >= MAX_VOICE_NOTE_SECONDS) voiceRecorderRef.current?.stop();
+      }, 1000);
+    } catch (error) {
+      stream?.getTracks().forEach((track) => track.stop());
+      voiceRecorderRef.current = null;
+      voiceStreamRef.current = null;
+      toast(error.message || 'Microphone access was denied.');
+    }
+  }
+
+  function stopVoiceRecording() {
+    window.clearInterval(voiceTimerRef.current);
+    voiceTimerRef.current = null;
+    if (voiceRecorderRef.current?.state === 'recording') voiceRecorderRef.current.stop();
+  }
+
+  function selectReply(message) {
+    if (!messageState?.canMessage || message.deleted_at) return;
+    setReplyTo(message);
+    window.requestAnimationFrame(() => messageInputRef.current?.focus());
+  }
+
+  async function locatePinnedMessage() {
+    let result = { data: messageQuery.data, hasNextPage: messageQuery.hasNextPage };
+    while (!result.data?.pages?.some((page) => page.messages.some((message) => message.id === pinnedMessageQuery.data?.message_id))
+      && result.hasNextPage) {
+      result = await messageQuery.fetchNextPage();
+    }
+    const found = result.data?.pages?.some((page) => page.messages.some((message) => message.id === pinnedMessageQuery.data?.message_id));
+    if (!found) {
+      toast('The pinned message is no longer available.');
+      return;
+    }
+    window.requestAnimationFrame(() => document.getElementById(`message-${pinnedMessageQuery.data.message_id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }));
   }
 
   function resetPlanForm() {
@@ -1053,11 +1605,212 @@ export function ConversationPage() {
     }
   }
 
+  async function submitBringItem(event) {
+    event.preventDefault();
+    const item = bringItemDraft.trim();
+    if (!selectedPlan || !item || item.length > 140 || planExtrasBusy) return;
+    setPlanExtrasBusy('bring-add');
+    setPlanExtrasError('');
+    try {
+      const { error } = await supabase.rpc('add_plan_bring_item', {
+        p_plan_id: selectedPlan.id,
+        p_item: item,
+      });
+      if (error) throw error;
+      setBringItemDraft('');
+      await queryClient.invalidateQueries({ queryKey: ['plan-extras', selectedPlan.id, user.id] });
+    } catch (error) {
+      setPlanExtrasError(error.message || 'The item could not be added.');
+    } finally {
+      setPlanExtrasBusy('');
+    }
+  }
+
+  async function updateBringItem(item, isBrought) {
+    if (!selectedPlan || planExtrasBusy) return;
+    setPlanExtrasBusy(item.id);
+    setPlanExtrasError('');
+    try {
+      const { error } = await supabase.rpc('set_plan_bring_item', {
+        p_item_id: item.id,
+        p_is_brought: isBrought,
+      });
+      if (error) throw error;
+      await queryClient.invalidateQueries({ queryKey: ['plan-extras', selectedPlan.id, user.id] });
+    } catch (error) {
+      setPlanExtrasError(error.message || 'The bring-list item could not be updated.');
+    } finally {
+      setPlanExtrasBusy('');
+    }
+  }
+
+  async function removeBringItem(itemId) {
+    if (!selectedPlan || planExtrasBusy) return;
+    setPlanExtrasBusy(itemId);
+    setPlanExtrasError('');
+    try {
+      const { error } = await supabase.rpc('delete_plan_bring_item', { p_item_id: itemId });
+      if (error) throw error;
+      await queryClient.invalidateQueries({ queryKey: ['plan-extras', selectedPlan.id, user.id] });
+    } catch (error) {
+      setPlanExtrasError(error.message || 'The bring-list item could not be removed.');
+    } finally {
+      setPlanExtrasBusy('');
+    }
+  }
+
+  async function submitPlanCost(event) {
+    event.preventDefault();
+    const amount = Number(costAmountDraft);
+    const currency = costCurrencyDraft.trim().toUpperCase();
+    const note = costNoteDraft.trim();
+    if (!selectedPlan || planExtrasBusy) return;
+    if (!Number.isFinite(amount) || amount <= 0 || amount > 9999999999.99
+      || !/^[A-Z]{3}$/.test(currency) || note.length > 200) {
+      setPlanExtrasError('Enter a positive amount, a three-letter currency code, and an optional note up to 200 characters.');
+      return;
+    }
+    setPlanExtrasBusy('cost-add');
+    setPlanExtrasError('');
+    try {
+      const { error } = await supabase.rpc('add_plan_cost', {
+        p_plan_id: selectedPlan.id,
+        p_amount: amount,
+        p_currency: currency,
+        p_note: note || null,
+      });
+      if (error) throw error;
+      setCostAmountDraft('');
+      setCostNoteDraft('');
+      await queryClient.invalidateQueries({ queryKey: ['plan-extras', selectedPlan.id, user.id] });
+    } catch (error) {
+      setPlanExtrasError(error.message || 'The cost could not be recorded.');
+    } finally {
+      setPlanExtrasBusy('');
+    }
+  }
+
+  async function removePlanCost(costId) {
+    if (!selectedPlan || planExtrasBusy) return;
+    setPlanExtrasBusy(costId);
+    setPlanExtrasError('');
+    try {
+      const { error } = await supabase.rpc('delete_plan_cost', { p_cost_id: costId });
+      if (error) throw error;
+      await queryClient.invalidateQueries({ queryKey: ['plan-extras', selectedPlan.id, user.id] });
+    } catch (error) {
+      setPlanExtrasError(error.message || 'The cost could not be removed.');
+    } finally {
+      setPlanExtrasBusy('');
+    }
+  }
+
+  async function toggleChatMemory(message) {
+    if (!messageState?.canMessage || memoryBusy) return;
+    const existing = memoriesQuery.data?.find((memory) => memory.message_id === message.id);
+    setMemoryBusy(message.id);
+    setMemoryError('');
+    try {
+      const { error } = existing
+        ? await supabase.rpc('remove_chat_memory', { p_memory_id: existing.id })
+        : await supabase.rpc('save_chat_memory', { p_message_id: message.id });
+      if (error) throw error;
+      await queryClient.invalidateQueries({ queryKey: ['chat-memories', conversationId, user.id] });
+    } catch (error) {
+      setMemoryError(error.message || 'The memory could not be updated.');
+    } finally {
+      setMemoryBusy('');
+    }
+  }
+
+  async function stopSharingLocation() {
+    locationSharingRef.current = false;
+    if (locationWatchRef.current !== null && navigator.geolocation) {
+      navigator.geolocation.clearWatch(locationWatchRef.current);
+      locationWatchRef.current = null;
+    }
+    if (locationExpiryTimerRef.current !== null) {
+      window.clearTimeout(locationExpiryTimerRef.current);
+      locationExpiryTimerRef.current = null;
+    }
+    setLocationSharing(false);
+    setLocationError('');
+    try {
+      const { error } = await supabase.rpc('stop_live_location', { p_conversation_id: conversationId });
+      if (error) throw error;
+      await queryClient.invalidateQueries({ queryKey: ['live-locations', conversationId, user.id] });
+    } catch (error) {
+      setLocationError(error.message || 'Location sharing could not be stopped on the server.');
+    }
+  }
+
+  function startSharingLocation() {
+    if (!messageState?.canMessage || locationSharingRef.current) return;
+    if (!navigator.geolocation) {
+      setLocationError('This browser does not support location sharing.');
+      return;
+    }
+    setLocationError('');
+    setLastLocationUpdated(null);
+    locationSharingRef.current = true;
+    locationExpiresAtRef.current = new Date(Date.now() + locationMinutes * 60_000).toISOString();
+    setLocationSharing(true);
+    locationExpiryTimerRef.current = window.setTimeout(() => {
+      locationSharingRef.current = false;
+      if (locationWatchRef.current !== null && navigator.geolocation) {
+        navigator.geolocation.clearWatch(locationWatchRef.current);
+        locationWatchRef.current = null;
+      }
+      setLocationSharing(false);
+      queryClient.invalidateQueries({ queryKey: ['live-locations', conversationId, user.id] });
+    }, locationMinutes * 60_000);
+    locationLastUpdateRef.current = 0;
+    locationWatchRef.current = navigator.geolocation.watchPosition(async (position) => {
+      if (!locationSharingRef.current) return;
+      const now = Date.now();
+      if (now - locationLastUpdateRef.current < 10_000 && locationLastUpdateRef.current !== 0) return;
+      locationLastUpdateRef.current = now;
+      try {
+        const { error } = await supabase.rpc('update_live_location', {
+          p_conversation_id: conversationId,
+          p_latitude: position.coords.latitude,
+          p_longitude: position.coords.longitude,
+          p_expires_at: locationExpiresAtRef.current,
+        });
+        if (error) throw error;
+        setLastLocationUpdated(new Date().toISOString());
+        setLocationError('');
+        await queryClient.invalidateQueries({ queryKey: ['live-locations', conversationId, user.id] });
+      } catch (error) {
+        locationSharingRef.current = false;
+        if (locationWatchRef.current !== null) navigator.geolocation.clearWatch(locationWatchRef.current);
+        locationWatchRef.current = null;
+        setLocationSharing(false);
+        setLocationError(error.message || 'Your location could not be shared.');
+      }
+    }, (error) => {
+      locationSharingRef.current = false;
+      if (locationWatchRef.current !== null) navigator.geolocation.clearWatch(locationWatchRef.current);
+      locationWatchRef.current = null;
+      setLocationSharing(false);
+      setLocationError(error.message || 'The browser could not access your location.');
+    }, { enableHighAccuracy: true, maximumAge: 5000, timeout: 20000 });
+  }
+
   const messageState = conversationQuery.data;
   const planData = plansQuery.data;
   const pollData = pollsQuery.data;
+  const memories = memoriesQuery.data ?? [];
+  const liveLocations = liveLocationsQuery.data ?? [];
+  const ownLiveLocation = liveLocations.find((location) => location.user_id === user?.id);
   const selectedPlan = planData?.plans.find((plan) => plan.id === selectedPlanId);
+  const planExtras = planExtrasQuery.data;
+  const planCostTotals = (planExtras?.costs ?? []).reduce((totals, cost) => {
+    totals[cost.currency] = (totals[cost.currency] ?? 0) + Math.round(Number(cost.amount) * 100);
+    return totals;
+  }, {});
   const currentMemberRole = messageState?.members.find((member) => member.user_id === user?.id)?.role;
+  const pinnedMessage = messages.find((message) => message.id === pinnedMessageQuery.data?.message_id);
   const canManageSelectedPlan = Boolean(selectedPlan && (
     planActionQuery.data && (selectedPlan.created_by === user?.id
     || (messageState?.conversation.type === 'group' && currentMemberRole === 'admin')
@@ -1083,10 +1836,79 @@ export function ConversationPage() {
           {headerMenuOpen && <div className="chat-header-popover">
             {otherProfile?.username && <Link to={`/profile/${otherProfile.username}`} onClick={() => setHeaderMenuOpen(false)}>View profile</Link>}
             {messageState?.conversation.type === 'group' && <button type="button" onClick={() => { setHeaderMenuOpen(false); setGroupInfoOpen(true); }}><UsersRound size={15} /> Group info</button>}
+            <label className="chat-expiry-setting">
+              <span>Disappearing messages</span>
+              <select
+                aria-label="Disappearing message expiry"
+                value={chatSettingsQuery.data?.expires_in_seconds ?? 0}
+                disabled={!messageState?.canMessage || chatSettingsQuery.isLoading}
+                onChange={changeChatExpiry}
+              >
+                <option value={0}>Off</option>
+                <option value={86400}>24 hours</option>
+                <option value={604800}>7 days</option>
+                <option value={2592000}>30 days</option>
+              </select>
+            </label>
           </div>}
         </div>
       </header>
+      <section className="chat-sharing-tools" aria-label="Memories and live location">
+        <div className="chat-sharing-actions">
+          <Button type="button" size="sm" variant="secondary" aria-expanded={showMemories} onClick={() => setShowMemories((open) => !open)}>
+            <Bookmark size={15} /> Memories ({memories.length})
+          </Button>
+          {messageState?.canMessage && !locationSharing && !ownLiveLocation && <label className="chat-location-duration">
+            <span>Share live location</span>
+            <select value={locationMinutes} onChange={(event) => setLocationMinutes(Number(event.target.value))} aria-label="Live location sharing duration">
+              <option value={15}>15 minutes</option>
+              <option value={60}>1 hour</option>
+            </select>
+          </label>}
+          {messageState?.canMessage && <Button type="button" size="sm" variant={locationSharing || ownLiveLocation ? 'danger' : 'secondary'} onClick={locationSharing || ownLiveLocation ? stopSharingLocation : startSharingLocation}>
+            <MapPin size={15} />{locationSharing || ownLiveLocation ? 'Stop sharing' : 'Share location'}
+          </Button>}
+        </div>
+        {showMemories && <div className="chat-memories-panel">
+          <strong>Saved from this conversation</strong>
+          {memoriesQuery.isLoading && <p role="status">Loading memories…</p>}
+          {memoriesQuery.isError && <div className="chat-live-warning" role="alert"><span>{memoriesQuery.error.message || 'Memories could not be loaded.'}</span><Button size="sm" variant="secondary" onClick={() => memoriesQuery.refetch()}>Try again</Button></div>}
+          {memoriesQuery.isSuccess && memories.length === 0 && <p>No saved memories in this conversation yet.</p>}
+          {memories.map((memory) => <div className="chat-memory-row" key={memory.id}>
+            <span><strong>{memory.message?.body || (memory.message?.image_url ? 'Photo' : memory.message?.voice_path ? 'Voice note' : 'Saved message')}</strong><small>{new Date(memory.message?.created_at || memory.created_at).toLocaleString()}</small></span>
+            <button type="button" aria-label="Remove saved memory" disabled={Boolean(memoryBusy)} onClick={() => toggleChatMemory({ id: memory.message_id })}><Trash2 size={14} /></button>
+          </div>)}
+          {memoryError && <p className="chat-memory-error" role="alert">{memoryError}</p>}
+        </div>}
+        {locationSharing && <p className="chat-location-status" role="status">
+          Sharing your live location until {new Date(locationExpiresAtRef.current).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}. Updates while this conversation is open{lastLocationUpdated ? ` · updated ${new Date(lastLocationUpdated).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}` : ' · waiting for location permission'}.
+        </p>}
+        {!locationSharing && ownLiveLocation && <p className="chat-location-status" role="status">Your last shared location remains visible until {new Date(ownLiveLocation.expires_at).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}. Start sharing again to resume updates.</p>}
+        {liveLocationsQuery.isLoading && <p className="chat-sharing-state" role="status">Checking shared locations…</p>}
+        {liveLocationsQuery.isError && <div className="chat-live-warning" role="alert"><span>{liveLocationsQuery.error.message || 'Shared locations could not be loaded.'}</span><Button size="sm" variant="secondary" onClick={() => liveLocationsQuery.refetch()}>Try again</Button></div>}
+        {liveLocationsQuery.isSuccess && liveLocations.filter((location) => location.user_id !== user.id).map((location) => {
+          const member = messageState?.profiles[location.user_id];
+          const mapUrl = `https://www.openstreetmap.org/?mlat=${location.latitude}&mlon=${location.longitude}#map=16/${location.latitude}/${location.longitude}`;
+          return <p className="chat-shared-location" key={location.user_id}>
+            <MapPin size={14} /><span><strong>{member?.name || 'A member'}</strong> is sharing live location · updated {new Date(location.updated_at).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}</span>
+            <a href={mapUrl} target="_blank" rel="noreferrer">View map</a>
+          </p>;
+        })}
+        {(locationError || locationRealtimeError) && <div className="chat-live-warning" role="alert"><span>{locationError || locationRealtimeError}</span>{locationRealtimeError && <Button size="sm" variant="secondary" onClick={() => liveLocationsQuery.refetch()}>Refresh</Button>}</div>}
+      </section>
+      {pinnedMessageQuery.isError && <div className="chat-live-warning" role="alert"><span>Pinned message could not be loaded: {pinnedMessageQuery.error.message}</span><Button size="sm" variant="secondary" onClick={() => pinnedMessageQuery.refetch()}>Try again</Button></div>}
+      {pinnedMessageQuery.data && <button
+        type="button"
+        className="chat-pinned-banner"
+        onClick={locatePinnedMessage}
+      >
+        <Pin size={15} />
+        <span><strong>Pinned message</strong><small>{pinnedMessage?.body || pinnedMessageQuery.data.message?.body || (pinnedMessage?.image_url || pinnedMessageQuery.data.message?.image_url ? 'Photo' : pinnedMessage?.voice_path || pinnedMessageQuery.data.message?.voice_path ? 'Voice note' : 'Deleted message')}</small></span>
+      </button>}
       {messageQuery.isError && <EmptyState title="Messages unavailable" description={messageQuery.error.message || 'Messages could not be loaded.'} action={<Button size="sm" variant="secondary" onClick={() => messageQuery.refetch()}>Try again</Button>} />}
+      {reactionsQuery.isError && <div className="chat-live-warning" role="alert"><span>Message reactions could not be loaded: {reactionsQuery.error.message}</span><Button size="sm" variant="secondary" onClick={() => reactionsQuery.refetch()}>Try again</Button></div>}
+      {reactionsQuery.isLoading && <p className="chat-live-warning" role="status">Loading message reactions…</p>}
+      {chatSettingsQuery.isError && <div className="chat-live-warning" role="alert"><span>Conversation settings could not be loaded: {chatSettingsQuery.error.message}</span><Button size="sm" variant="secondary" onClick={() => chatSettingsQuery.refetch()}>Try again</Button></div>}
       {messageState && !messageState.canMessage && <div className="chat-disabled-banner" role="status">{messageState.isBlocked ? 'Messaging is unavailable for this conversation.' : 'You can message this person once they accept your friend request.'}</div>}
       {plansQuery.isError && <div className="chat-plan-live-warning" role="alert"><span>{plansQuery.error.message || 'Plans could not be loaded.'}</span><Button size="sm" variant="secondary" onClick={() => plansQuery.refetch()}>Try again</Button></div>}
       {plansQuery.isLoading && <p className="chat-plan-loading" role="status">Loading plans…</p>}
@@ -1177,19 +1999,51 @@ export function ConversationPage() {
                   || next.message_type === 'plan'
                   || new Date(next.created_at).toDateString() !== new Date(message.created_at).toDateString();
                 const seen = own && otherMember?.last_read_at && new Date(otherMember.last_read_at) >= new Date(message.created_at);
+                const replyTarget = messages.find((item) => item.id === message.reply_to_message_id);
+                const messageReactions = (reactionsQuery.data ?? []).filter((reaction) => reaction.message_id === message.id);
+                const canModifyContent = Boolean(messageState?.canMessage && !message.deleted_at
+                  && ['text', 'image', 'voice'].includes(message.message_type));
                 return (
-                  <div className="chat-message-item" key={message.id}>
+                  <div className="chat-message-item" key={message.id} id={`message-${message.id}`}>
                     {newDay && <div className="chat-day-separator"><span>{dayLabel(message.created_at)}</span></div>}
                     <div className={`chat-message${own ? ' chat-message-own' : ''}${groupStart ? ' chat-message-group-start' : ' chat-message-group-continuation'}${groupEnd ? ' chat-message-group-end' : ''}`}>
                       {!own && <Avatar src={sender?.photo_url} name={sender?.name || 'Member'} size="xs" className={!groupStart ? 'chat-group-avatar-hidden' : ''} />}
                       <div className={`chat-message-content${message.failed ? ' chat-message-failed' : ''}`}>
                         {!own && groupStart && <span className="chat-message-sender">{sender?.name || 'Member'}</span>}
-                        {message.image_url?.startsWith('blob:')
-                          ? <button className="chat-image-open" type="button" onClick={() => setLightboxUrl(message.image_url)} aria-label="Open image"><img className="chat-image" src={message.image_url} alt="Image to send" /></button>
-                          : message.image_url && <ChatImage path={message.image_url} alt="Shared image" onImageClick={setLightboxUrl} />}
-                        {message.body && <p>{message.body}</p>}
-                        <time dateTime={message.created_at}>{new Date(message.created_at).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}{own && !message.failed && (seen ? <CheckCheck className="chat-receipt-seen" size={15} aria-label="Seen" /> : <Check className="chat-receipt-sent" size={15} aria-label="Sent" />)}</time>
+                        {message.reply_to_message_id && <div className="chat-reply-quote">
+                          <strong>{replyTarget?.sender_id === user.id ? 'You' : messageState.profiles[replyTarget?.sender_id]?.name || 'Reply'}</strong>
+                          <span>{replyTarget?.deleted_at ? 'Message deleted' : replyTarget?.body || (replyTarget?.image_url ? 'Photo' : replyTarget?.voice_path ? 'Voice note' : 'Original message')}</span>
+                        </div>}
+                        {editingMessageId === message.id
+                          ? <form className="chat-message-edit" onSubmit={(event) => saveEditedMessage(event, message.id)}>
+                              <textarea aria-label="Edit message" value={editDraft} maxLength={5000} onChange={(event) => setEditDraft(event.target.value)} autoFocus />
+                              <span><button type="button" onClick={() => { setEditingMessageId(''); setEditDraft(''); }}>Cancel</button><button type="submit" disabled={!editDraft.trim() || messageActionBusy === message.id}>Save</button></span>
+                            </form>
+                          : message.message_type === 'deleted'
+                            ? <p className="chat-message-deleted">This message was deleted.</p>
+                            : <>
+                                {message.image_url?.startsWith('blob:')
+                                  ? <button className="chat-image-open" type="button" onClick={() => setLightboxUrl(message.image_url)} aria-label="Open image"><img className="chat-image" src={message.image_url} alt="Image to send" /></button>
+                                  : message.image_url && <ChatImage path={message.image_url} alt="Shared image" onImageClick={setLightboxUrl} />}
+                                {message.voice_path && <ChatVoiceNote path={message.voice_path} />}
+                                {message.body && <p>{message.body}</p>}
+                              </>}
+                        <time dateTime={message.created_at}>{message.edited_at && <span>Edited · </span>}{new Date(message.created_at).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}{own && !message.failed && (seen ? <CheckCheck className="chat-receipt-seen" size={15} aria-label="Seen" /> : <Check className="chat-receipt-sent" size={15} aria-label="Sent" />)}</time>
                         {message.failed && <button type="button" className="chat-retry-button" onClick={() => sendMessage(null, message)}>Failed · Retry</button>}
+                        {!message.failed && message.message_type !== 'deleted' && <div className="chat-message-tools">
+                          {message.message_type !== 'system' && <button type="button" title={memories.some((memory) => memory.message_id === message.id) ? 'Remove from memories' : 'Save to memories'} aria-label={memories.some((memory) => memory.message_id === message.id) ? 'Remove from memories' : 'Save to memories'} disabled={!messageState?.canMessage || memoryBusy === message.id} onClick={() => toggleChatMemory(message)}><Bookmark size={13} /></button>}
+                          <button type="button" title="Reply" aria-label="Reply to message" disabled={!messageState?.canMessage || !canModifyContent} onClick={() => selectReply(message)}><Reply size={13} /></button>
+                          {own && message.message_type === 'text' && <button type="button" title="Edit" aria-label="Edit message" disabled={!messageState?.canMessage || messageActionBusy === message.id} onClick={() => { setEditingMessageId(message.id); setEditDraft(message.body || ''); }}><Pencil size={13} /></button>}
+                          {own && canModifyContent && <button type="button" title="Delete for everyone" aria-label="Delete message for everyone" disabled={!messageState?.canMessage || messageActionBusy === message.id} onClick={() => deleteMessage(message)}><Trash2 size={13} /></button>}
+                          {canModifyContent && <button type="button" title={pinnedMessageQuery.data?.message_id === message.id ? 'Unpin message' : 'Pin message'} aria-label={pinnedMessageQuery.data?.message_id === message.id ? 'Unpin message' : 'Pin message'} disabled={!messageState?.canMessage || messageActionBusy === message.id} onClick={() => togglePin(message)}><Pin size={13} /></button>}
+                        </div>}
+                        {canModifyContent && <div className="chat-reaction-row">
+                          {REACTION_CHOICES.map((emoji) => {
+                            const matching = messageReactions.filter((reaction) => reaction.emoji === emoji);
+                            const selected = matching.some((reaction) => reaction.user_id === user.id);
+                            return <button type="button" key={emoji} className={selected ? 'chat-reaction-selected' : ''} aria-label={`${emoji} reaction${matching.length ? `, ${matching.length}` : ''}`} aria-pressed={selected} disabled={!messageState?.canMessage || messageActionBusy === message.id} onClick={() => toggleReaction(message.id, emoji)}>{emoji}{matching.length > 0 && <span>{matching.length}</span>}</button>;
+                          })}
+                        </div>}
                       </div>
                     </div>
                   </div>
@@ -1200,6 +2054,7 @@ export function ConversationPage() {
             </div>
             {showScrollBottom && <button type="button" className="chat-scroll-bottom" aria-label="Scroll to latest message" onClick={() => bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })}><ArrowDown size={18} /></button>}
             {gatherOffer && <div className="chat-gather-offer"><span>Want to make it a plan?</span><Button size="sm" onClick={() => { resetPlanForm(); setCreatePlanOpen(true); setGatherOffer(false); }}>Create a plan</Button><button type="button" aria-label="Dismiss plan suggestion" onClick={() => setGatherOffer(false)}><X size={14} /></button></div>}
+            {replyTo && <div className="chat-composing-reply"><span><strong>Replying to {replyTo.sender_id === user.id ? 'yourself' : messageState.profiles[replyTo.sender_id]?.name || 'member'}</strong><small>{replyTo.body || (replyTo.image_url ? 'Photo' : replyTo.voice_path ? 'Voice note' : 'Message')}</small></span><button type="button" aria-label="Cancel reply" onClick={() => setReplyTo(null)}><X size={15} /></button></div>}
             <form className="conversation-compose" onSubmit={sendMessage}>
               {pendingImage && <div className="chat-image-preview"><img src={pendingImage.previewUrl} alt="Selected to send" /><button type="button" aria-label="Remove selected image" onClick={() => { URL.revokeObjectURL(pendingImage.previewUrl); selectedImageUrlRef.current = null; setPendingImage(null); }}><X size={14} /></button></div>}
               <div className="chat-compose-tools">
@@ -1210,15 +2065,22 @@ export function ConversationPage() {
                     <button type="button" onClick={() => { setPlanMenuOpen(false); resetPollForm(); setCreatePollOpen(true); }}><CalendarDays size={16} />Create availability poll</button>
                   </div>}
                 </div>
-                <button type="button" className="chat-compose-tool" aria-label="Add image" disabled={!messageState?.canMessage || sending} onClick={() => imageInputRef.current?.click()}><ImagePlus size={18} /></button>
+                <button type="button" className="chat-compose-tool" aria-label="Add image" disabled={!messageState?.canMessage || sending || voiceSending} onClick={() => imageInputRef.current?.click()}><ImagePlus size={18} /></button>
                 <input ref={imageInputRef} type="file" accept="image/jpeg,image/png,image/webp,image/gif" hidden onChange={(event) => { selectImage(event.target.files?.[0]); event.target.value = ''; }} />
                 <div className="chat-emoji-wrap">
-                  <button type="button" className="chat-compose-tool" aria-label="Choose emoji" aria-expanded={emojiOpen} disabled={!messageState?.canMessage} onClick={() => setEmojiOpen((open) => !open)}><Smile size={18} /></button>
+                  <button type="button" className="chat-compose-tool" aria-label="Choose emoji" aria-expanded={emojiOpen} disabled={!messageState?.canMessage || sending || voiceSending} onClick={() => setEmojiOpen((open) => !open)}><Smile size={18} /></button>
                   {emojiOpen && <div className="chat-emoji-popover"><EmojiPicker onEmojiClick={(emoji) => { changeBody(`${body}${emoji.emoji}`); setEmojiOpen(false); }} theme={document.documentElement.classList.contains('dark') ? 'dark' : 'light'} height={350} width={300} /></div>}
                 </div>
+                <button
+                  type="button"
+                  className={`chat-compose-tool${voiceRecording ? ' chat-recording' : ''}`}
+                  aria-label={voiceRecording ? `Stop recording at ${voiceSeconds} seconds` : 'Record voice note'}
+                  disabled={!messageState?.canMessage || voiceSending || sending}
+                  onClick={voiceRecording ? stopVoiceRecording : startVoiceRecording}
+                >{voiceRecording ? <><Square size={15} /><span>{voiceSeconds}s</span></> : <Mic size={18} />}</button>
               </div>
-              <input aria-label="Write a message" placeholder={messageState?.canMessage ? 'Write a message…' : 'Messaging unavailable'} maxLength={5000} value={body} onChange={(event) => changeBody(event.target.value)} disabled={!messageState?.canMessage || sending} />
-              <Button className={`chat-send-button${body.trim() || pendingImage ? ' chat-send-button-visible' : ''}`} type="submit" loading={sending} disabled={(!body.trim() && !pendingImage) || !messageState?.canMessage} aria-label="Send message"><Send size={17} /></Button>
+              <input ref={messageInputRef} aria-label="Write a message" placeholder={messageState?.canMessage ? 'Write a message…' : 'Messaging unavailable'} maxLength={5000} value={body} onChange={(event) => changeBody(event.target.value)} disabled={!messageState?.canMessage || sending || voiceSending} />
+              <Button className={`chat-send-button${body.trim() || pendingImage ? ' chat-send-button-visible' : ''}`} type="submit" loading={sending || voiceSending} disabled={(!body.trim() && !pendingImage) || !messageState?.canMessage} aria-label="Send message"><Send size={17} /></Button>
             </form>
           </>
         )}
@@ -1316,6 +2178,124 @@ export function ConversationPage() {
                 );
               })}
             </section>
+            <section className="plan-extras-section" aria-labelledby="plan-bring-list-heading">
+              <div className="plan-extras-heading">
+                <h3 id="plan-bring-list-heading"><ShoppingBasket size={16} />Bring list</h3>
+                <span>{planExtras?.items.length ?? 0} items</span>
+              </div>
+              {planExtrasQuery.isLoading && <p className="plan-extras-state">Loading the bring list…</p>}
+              {planExtrasQuery.isError && <div className="plan-extras-error" role="alert">
+                <p>{planExtrasQuery.error.message || 'The bring list could not be loaded.'}</p>
+                <Button size="sm" variant="secondary" onClick={() => planExtrasQuery.refetch()}>Try again</Button>
+              </div>}
+              {planExtrasQuery.isSuccess && planExtras?.items.length === 0 && <p className="plan-extras-state">Nothing has been added yet.</p>}
+              {planExtrasQuery.isSuccess && planExtras?.items.length > 0 && (
+                <ul className="plan-extras-list">
+                  {planExtras.items.map((item) => {
+                    const addedBy = planExtras.profiles[item.created_by]?.name || 'A member';
+                    const broughtBy = item.brought_by ? planExtras.profiles[item.brought_by]?.name || 'A member' : '';
+                    const canRemove = item.created_by === user?.id || selectedPlan.created_by === user?.id || canManageSelectedPlan;
+                    return (
+                      <li className={`plan-bring-item${item.is_brought ? ' is-brought' : ''}`} key={item.id}>
+                        <button
+                          type="button"
+                          className="plan-bring-toggle"
+                          onClick={() => updateBringItem(item, !item.is_brought)}
+                          disabled={Boolean(planExtrasBusy) || selectedPlan.status !== 'active'}
+                          aria-pressed={item.is_brought}
+                          aria-label={`${item.is_brought ? 'Mark not brought' : 'Mark brought'}: ${item.item}`}
+                        ><Check size={15} /></button>
+                        <span className="plan-bring-copy">
+                          <strong>{item.item}</strong>
+                          <small>{item.is_brought ? `Brought by ${broughtBy}` : `Added by ${addedBy}`}</small>
+                        </span>
+                        {canRemove && <button
+                          type="button"
+                          className="plan-extras-remove"
+                          onClick={() => removeBringItem(item.id)}
+                          disabled={Boolean(planExtrasBusy)}
+                          aria-label={`Remove ${item.item}`}
+                        ><Trash2 size={14} /></button>}
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+              {selectedPlan.status === 'active' && (
+                <form className="plan-extras-add-row" onSubmit={submitBringItem}>
+                  <input
+                    className="ui-input"
+                    value={bringItemDraft}
+                    maxLength={140}
+                    onChange={(event) => setBringItemDraft(event.target.value)}
+                    placeholder="Add something to bring"
+                    aria-label="Item to add to the bring list"
+                    required
+                  />
+                  <Button type="submit" size="sm" loading={planExtrasBusy === 'bring-add'} disabled={!bringItemDraft.trim() || Boolean(planExtrasBusy)}><Plus size={14} />Add</Button>
+                </form>
+              )}
+            </section>
+            <section className="plan-extras-section" aria-labelledby="plan-costs-heading">
+              <div className="plan-extras-heading">
+                <h3 id="plan-costs-heading"><Receipt size={16} />Costs</h3>
+                <span>Individual expenses · totals only</span>
+              </div>
+              {planExtrasQuery.isSuccess && Object.entries(planCostTotals).length > 0 && (
+                <div className="plan-cost-totals" aria-label="Expense totals">
+                  {Object.entries(planCostTotals).sort(([currencyA], [currencyB]) => currencyA.localeCompare(currencyB)).map(([currency, total]) => (
+                    <p key={currency}><span>Total ({currency})</span><strong>{new Intl.NumberFormat(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(total / 100)} {currency}</strong></p>
+                  ))}
+                </div>
+              )}
+              {planExtrasQuery.isSuccess && planExtras?.costs.length === 0 && <p className="plan-extras-state">No expenses recorded yet.</p>}
+              {planExtrasQuery.isSuccess && planExtras?.costs.length > 0 && (
+                <ul className="plan-extras-list plan-cost-list">
+                  {planExtras.costs.map((cost) => {
+                    const paidBy = planExtras.profiles[cost.paid_by]?.name || 'A member';
+                    const canRemove = cost.paid_by === user?.id || selectedPlan.created_by === user?.id || canManageSelectedPlan;
+                    return (
+                      <li className="plan-cost-item" key={cost.id}>
+                        <span className="plan-cost-copy">
+                          <strong>{new Intl.NumberFormat(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(Number(cost.amount))} {cost.currency}</strong>
+                          <small>{cost.note || `Paid by ${paidBy}`}{cost.note ? ` · Paid by ${paidBy}` : ''}</small>
+                        </span>
+                        {canRemove && <button
+                          type="button"
+                          className="plan-extras-remove"
+                          onClick={() => removePlanCost(cost.id)}
+                          disabled={Boolean(planExtrasBusy)}
+                          aria-label={`Remove cost ${cost.amount} ${cost.currency}`}
+                        ><Trash2 size={14} /></button>}
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+              {selectedPlan.status === 'active' && (
+                <form className="plan-cost-form" onSubmit={submitPlanCost}>
+                  <label className="chat-plan-field">
+                    <span>Amount</span>
+                    <input className="ui-input" type="number" inputMode="decimal" min="0.01" max="9999999999.99" step="0.01" value={costAmountDraft} onChange={(event) => setCostAmountDraft(event.target.value)} placeholder="0.00" required />
+                  </label>
+                  <label className="chat-plan-field">
+                    <span>Currency</span>
+                    <input className="ui-input plan-cost-currency" value={costCurrencyDraft} maxLength={3} onChange={(event) => setCostCurrencyDraft(event.target.value.toUpperCase())} aria-label="Three-letter currency code" required />
+                  </label>
+                  <label className="chat-plan-field plan-cost-note">
+                    <span>Note <small>Optional</small></span>
+                    <input className="ui-input" value={costNoteDraft} maxLength={200} onChange={(event) => setCostNoteDraft(event.target.value)} placeholder="What was this for?" />
+                  </label>
+                  <Button type="submit" size="sm" loading={planExtrasBusy === 'cost-add'} disabled={!costAmountDraft || !/^[A-Z]{3}$/.test(costCurrencyDraft.trim()) || Boolean(planExtrasBusy)}><Plus size={14} />Add expense</Button>
+                </form>
+              )}
+            </section>
+            {(planExtrasError || planExtrasRealtimeError) && (
+              <div className="plan-extras-error" role="alert">
+                <p>{planExtrasError || planExtrasRealtimeError}</p>
+                {!planExtrasError && planExtrasRealtimeError && <Button size="sm" variant="secondary" onClick={() => planExtrasQuery.refetch()}>Refresh</Button>}
+              </div>
+            )}
             {planActionError && <p className="chat-plan-form-error" role="alert">{planActionError}</p>}
             <div className="chat-plan-detail-actions">
               <Button variant="secondary" onClick={() => downloadPlanCalendarFile(selectedPlan)}><CalendarPlus size={15} />Add to calendar</Button>

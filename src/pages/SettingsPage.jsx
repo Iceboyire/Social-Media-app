@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
-import { ArrowLeft, Check, Moon, Sun, UserX } from 'lucide-react';
+import { ArrowLeft, Check, Download, Moon, Sun, Trash2, UserX } from 'lucide-react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { AppPageHeader } from '../components/AppPageHeader';
 import { Avatar } from '../components/ui/Avatar';
 import { Button } from '../components/ui/Button';
@@ -24,7 +24,12 @@ export function SettingsPage({ dark, onToggleTheme, editProfile = false }) {
   const updateProfile = useUpdateProfile();
   const toast = useToast();
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const [unblockingId, setUnblockingId] = useState('');
+  const [exportingData, setExportingData] = useState(false);
+  const [accountDeletionConfirmation, setAccountDeletionConfirmation] = useState('');
+  const [deletingAccount, setDeletingAccount] = useState(false);
+  const [accountActionError, setAccountActionError] = useState('');
   const blockedQuery = useQuery({
     queryKey: ['blocked-users', user?.id],
     queryFn: async () => {
@@ -118,6 +123,72 @@ export function SettingsPage({ dark, onToggleTheme, editProfile = false }) {
       ]);
     } finally {
       setUnblockingId('');
+    }
+  }
+
+  async function downloadAccountData() {
+    if (exportingData) return;
+    setExportingData(true);
+    setAccountActionError('');
+    try {
+      const { data, error: exportError } = await supabase.rpc('export_own_account_data');
+      if (exportError) throw exportError;
+      if (!data || typeof data !== 'object') throw new Error('The account data export was empty or invalid.');
+      const file = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(file);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `gather-data-${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.append(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      toast('Your account data has been downloaded.', 'success');
+    } catch (exportError) {
+      const message = exportError.message || 'Your account data could not be downloaded.';
+      setAccountActionError(message);
+      toast(message);
+    } finally {
+      setExportingData(false);
+    }
+  }
+
+  async function deleteAccount() {
+    if (deletingAccount || accountDeletionConfirmation.trim().toLowerCase() !== user?.email?.toLowerCase()) return;
+    setDeletingAccount(true);
+    setAccountActionError('');
+    try {
+      const { data: objects, error: objectsError } = await supabase.rpc('list_own_storage_objects');
+      if (objectsError) throw objectsError;
+      if (!Array.isArray(objects)) throw new Error('The storage cleanup list could not be verified; account deletion was stopped.');
+      const objectsByBucket = objects.reduce((groups, object) => {
+        if (!object?.bucket_id || !object?.name) throw new Error('The storage cleanup list contained an invalid object; account deletion was stopped.');
+        (groups[object.bucket_id] ??= []).push(object.name);
+        return groups;
+      }, {});
+      for (const [bucket, paths] of Object.entries(objectsByBucket)) {
+        for (let offset = 0; offset < paths.length; offset += 100) {
+          const { error: storageError } = await supabase.storage.from(bucket).remove(paths.slice(offset, offset + 100));
+          if (storageError) throw new Error(`Account deletion stopped because stored ${bucket} files could not be removed: ${storageError.message}`);
+        }
+      }
+      const { error: deleteError } = await supabase.rpc('delete_own_account');
+      if (deleteError) throw deleteError;
+
+      queryClient.clear();
+      const { error: signOutError } = await supabase.auth.signOut({ scope: 'local' });
+      if (signOutError) {
+        setAccountActionError(`Your account was deleted, but this device could not clear the local session: ${signOutError.message}`);
+        return;
+      }
+      toast('Your Gather account has been deleted.', 'success');
+      navigate('/', { replace: true });
+    } catch (deleteError) {
+      const message = deleteError.message || 'Your account could not be deleted.';
+      setAccountActionError(message);
+      toast(message);
+    } finally {
+      setDeletingAccount(false);
     }
   }
 
@@ -233,6 +304,31 @@ export function SettingsPage({ dark, onToggleTheme, editProfile = false }) {
             <input type="checkbox" checked={browserNotifications} onChange={toggleBrowserNotifications} />
           </label>
         </Card>
+        {!editProfile && <Card className="settings-card settings-data-card">
+          <h2>Your data</h2>
+          <p className="settings-card-intro">Download a copy of your Gather data or permanently delete your account and associated app records.</p>
+          <Button type="button" variant="secondary" loading={exportingData} onClick={downloadAccountData}><Download size={15} />Download my data</Button>
+          <div className="settings-delete-account">
+            <label className="settings-data-label" htmlFor="delete-account-email">To delete your account, enter your sign-in email: <strong>{user?.email}</strong></label>
+            <Input
+              id="delete-account-email"
+              label="Confirm email"
+              type="email"
+              autoComplete="email"
+              value={accountDeletionConfirmation}
+              onChange={(event) => setAccountDeletionConfirmation(event.target.value)}
+              disabled={deletingAccount}
+            />
+            <Button
+              type="button"
+              variant="danger"
+              loading={deletingAccount}
+              disabled={accountDeletionConfirmation.trim().toLowerCase() !== user?.email?.toLowerCase()}
+              onClick={deleteAccount}
+            ><Trash2 size={15} />Delete account permanently</Button>
+          </div>
+          {accountActionError && <div className="inline-alert" role="alert">{accountActionError}</div>}
+        </Card>}
         <div className="settings-side">
           <Card className="settings-card">
             <h2>Appearance</h2>

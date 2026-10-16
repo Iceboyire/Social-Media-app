@@ -47,7 +47,7 @@ export function PrivacyPolicy() {
           <header className="privacy-policy-title">
             <span className="landing-eyebrow">GATHER · YOUR SPACE</span>
             <h1>Privacy Policy</h1>
-            <p>Last updated: October 15, 2026</p>
+            <p>Last updated: October 16, 2026</p>
           </header>
 
           <nav className="privacy-policy-toc" aria-label="Table of contents">
@@ -71,14 +71,16 @@ export function PrivacyPolicy() {
               <ul>
                 <li><strong>Account information:</strong> your name, username, email address and password. Your password is handled by our authentication provider and is stored in a protected, hashed form. We cannot see it.</li>
                 <li><strong>Profile information:</strong> your profile photo, your bio and, if you choose to add it, your location. Your bio and location are optional.</li>
-                <li><strong>Content you create:</strong> messages, emojis and images you send in direct chats and group chats, group names and group photos.</li>
+                <li><strong>Content you create:</strong> messages, replies and edits, reactions, pinned-message choices, saved messages, images and voice notes you share in direct and group chats, plan details, bring-list items, and expense amounts, currencies and notes, as well as group names and photos.</li>
                 <li><strong>Reports and feedback:</strong> when you report a user or a message, we collect the details of the report, the reason you choose and any note you add.</li>
                 <li><strong>Communications with us:</strong> if you email us, we keep your message and our reply.</li>
               </ul>
               <p><strong>2.2 Information created when you use Gather</strong></p>
               <ul>
                 <li><strong>Social connections:</strong> friend requests you send or receive (and their status: pending, accepted or declined), your friends list, people you block, and your group memberships and roles.</li>
-                <li><strong>Messaging activity:</strong> time of messages, read receipts (whether a message has been seen), and conversation membership. Typing indicators and online status are shown in real time and are not kept as permanent records.</li>
+                <li><strong>Messaging activity:</strong> message times, edits, reactions, pins, your conversation's disappearing-message setting, read receipts (whether a message has been seen), and conversation membership. Typing indicators and online status are shown in real time and are not kept as permanent records.</li>
+                <li><strong>Planning activity:</strong> plans you create or respond to, items on a plan's bring list and whether a member marked an item as brought, and individual expenses with the member who recorded each expense.</li>
+                <li><strong>Live location (optional):</strong> precise device location is shared only when you explicitly start sharing it in a conversation. The latest coordinates are visible to its authorised members until you stop sharing or the selected 15-minute or one-hour period expires.</li>
                 <li><strong>Notifications:</strong> records of notifications we send you inside the app, such as friend requests, accepted requests, new messages and group invitations.</li>
                 <li><strong>Activity information:</strong> the time you were last active, and when you signed up.</li>
                 <li><strong>Moderation records:</strong> whether your account has been suspended or banned, and related notes made by our administrators.</li>
@@ -88,7 +90,7 @@ export function PrivacyPolicy() {
                 <li><strong>Technical data:</strong> IP address, browser type and version, device type, operating system, language and approximate region derived from your IP address.</li>
                 <li><strong>Local storage:</strong> small pieces of data stored in your browser to keep you signed in and remember settings such as dark mode (see Section 12).</li>
               </ul>
-              <p>We do not collect your precise GPS location. The location on your profile is text that you type yourself.</p>
+              <p>We do not collect precise GPS location unless you choose to share your live location in a conversation. The location on your profile is separate text that you type yourself. Live coordinates are removed after sharing stops or expires; a scheduled cleanup removes expired records.</p>
             </PolicySection>
 
             <PolicySection id="how-we-use-your-information" title="3. How We Use Your Information">
@@ -98,6 +100,8 @@ export function PrivacyPolicy() {
                 <li>Let you build a profile and let other users find you through search by name or username.</li>
                 <li>Provide friend requests, friends lists, direct messaging and group chats, and enforce the rule that only friends can message each other.</li>
                 <li>Deliver messages and notifications in real time.</li>
+                <li>Store and deliver the images and voice notes you choose to share in conversations.</li>
+                <li>Coordinate plans through shared bring lists and expense records, and show expense totals by currency without dividing costs among members.</li>
                 <li>Show read receipts, typing indicators and online status.</li>
                 <li>Enforce blocking so that people you block cannot find you, contact you or interact with you.</li>
                 <li>Review reports, investigate abuse and take action such as warnings, suspensions or bans.</li>
@@ -124,7 +128,9 @@ export function PrivacyPolicy() {
               <ul>
                 <li>Your name, username, profile photo, bio and location (if provided) can be seen by other users who find your profile. People you have blocked, and people who have blocked you, cannot find or view your profile.</li>
                 <li>Your online status, last active time and typing activity can be seen by your friends and by the people in your conversations.</li>
-                <li>Messages and images in a direct chat are visible to you and the friend you are chatting with. Messages and images in a group chat are visible to the current members of that group, and to members who were part of the group when the messages were sent.</li>
+                <li>Messages, replies, reactions, images and voice notes in a direct chat are visible to you and the friend you are chatting with. These items in a group chat are visible to the current members of that group, and to members who were part of the group when they were shared.</li>
+                <li>Plans, plan responses, bring-list items and expenses are visible to authorised members of the conversation where the plan was created.</li>
+                <li>While you share live location, your current coordinates are visible to active authorised members of that conversation. If you open the optional map link, your browser opens OpenStreetMap with the coordinates in its URL.</li>
                 <li>If you unfriend someone, the direct chat becomes read only. The history of that chat remains visible to both of you but neither of you can send new messages.</li>
                 <li>A person you have exchanged messages with can copy, screenshot or share what you sent. Please only share what you are comfortable sharing.</li>
               </ul>
@@ -152,8 +158,8 @@ export function PrivacyPolicy() {
             <PolicySection id="how-long-we-keep-your-information" title="8. How Long We Keep Your Information">
               <ul>
                 <li><strong>Account and profile information:</strong> kept while your account is active.</li>
-                <li><strong>Messages and images:</strong> kept while your account is active so that your conversations remain available. When you leave a group, the group's earlier messages remain available to its other members.</li>
-                <li><strong>Deleted accounts:</strong> when you delete your account, we delete or anonymise your profile and personal information within 30 days. Messages you sent in conversations may be removed or shown as sent by a deleted user.</li>
+                <li><strong>Messages and attachments:</strong> kept while your account is active unless you delete a message or enable disappearing messages for the conversation. Expiry applies to messages sent while the setting is enabled (24 hours, 7 days or 30 days); expired content becomes unavailable in the app and message records are removed by scheduled cleanup. Related image and voice files are made inaccessible at expiry and queued for storage cleanup, which may complete when the sender next opens a conversation. When you leave a group, earlier messages remain available to its other members.</li>
+                <li><strong>Deleted accounts:</strong> account deletion removes your profile and associated Gather database records immediately, including messages sent by your account. Before deletion, the app attempts to remove files stored in your account-owned folders. Deleted information may remain in secure backups for up to 90 days.</li>
                 <li><strong>Backups:</strong> deleted information may remain in secure backups for up to 90 days before it is permanently overwritten.</li>
                 <li><strong>Reports and moderation records:</strong> kept for as long as needed to protect users, prevent repeat abuse and meet legal obligations, usually up to 24 months after the report is resolved.</li>
                 <li><strong>Banned accounts:</strong> we may keep your email address and related records after a ban to stop you from creating new accounts to avoid the ban.</li>
@@ -165,11 +171,10 @@ export function PrivacyPolicy() {
             <PolicySection id="your-rights-and-choices" title="9. Your Rights and Choices">
               <p>Depending on where you live, you may have the following rights:</p>
               <ul>
-                <li><strong>Access:</strong> ask for a copy of the personal information we hold about you.</li>
+                <li><strong>Access and portability:</strong> download a machine-readable copy of your Gather profile, activity and content from Settings, or ask us for other personal information we hold about you.</li>
                 <li><strong>Correction:</strong> ask us to fix information that is inaccurate or incomplete. You can edit most profile details yourself in Settings.</li>
-                <li><strong>Deletion:</strong> ask us to delete your account and personal information.</li>
+                <li><strong>Deletion:</strong> permanently delete your Gather account and associated app records from Settings. Account-owned stored files are removed as part of the process.</li>
                 <li><strong>Restriction and objection:</strong> ask us to limit or stop certain uses of your information, including uses based on our legitimate interests.</li>
-                <li><strong>Portability:</strong> ask for your information in a commonly used, machine-readable format.</li>
                 <li><strong>Withdrawing consent:</strong> where we rely on your consent, you can withdraw it at any time without affecting earlier use.</li>
                 <li><strong>Complaint:</strong> lodge a complaint with your local data protection authority if you believe your rights have been violated.</li>
               </ul>
@@ -193,7 +198,7 @@ export function PrivacyPolicy() {
                 <li>Secure, hashed password storage through our authentication provider.</li>
                 <li>Access rules on our database so that users can only read and send the data they are allowed to access.</li>
                 <li>Restricted administrator access and role checks.</li>
-                <li>Limits on the type and size of images that can be uploaded.</li>
+                <li>Limits on the type and size of images and voice notes that can be uploaded, and access rules for conversation attachments.</li>
               </ul>
               <p>No online service can be completely secure. You are responsible for keeping your password confidential, using a strong and unique password, and signing out on shared devices. If you believe your account has been compromised, contact us immediately at ireoluwadavid16@gmail.com.</p>
             </PolicySection>
